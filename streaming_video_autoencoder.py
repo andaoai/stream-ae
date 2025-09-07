@@ -1,28 +1,5 @@
 """
-流式视频自编码器核心实现
 
-本模块实现了基于ObGD（Online Gradient Descent）优化器的流式视频自编码器。
-主要特性：
-1. 在线学习 - 无需存储历史数据，适合长时间流式处理
-2. 双损失函数 - 细节损失和全局损失的平衡设计
-3. 像素变化检测 - 智能识别帧间变化区域
-4. 稀疏初始化 - 提高模型的泛化能力和训练稳定性
-5. 实时可视化 - 支持训练过程的实时监控
-
-优化器设计参考：
-https://github.com/mohmdelsayed/streaming-drl
-借鉴了该项目在流式深度强化学习中的在线优化思想，
-特别是ObGD优化器在处理非平稳数据流时的优势。
-
-核心组件：
-- StreamingAutoEncoder: 主要的自编码器模型
-- PixelChangeDetector: 帧间变化检测器
-- LayerNormalization: 自定义层归一化
-- ObGD Optimizer: 在线梯度下降优化器
-
-作者：流式AI团队
-版本：1.0
-日期：2024
 """
 
 import torch
@@ -94,7 +71,7 @@ class StreamingAutoEncoder(nn.Module):
             input_channels (int): 输入图像通道数，默认3（RGB）
             base_channels (int): 编码器基础通道数（保留兼容性，实际使用固定设计）
             latent_channels (int): 潜在空间维度，每个分支的输出通道数
-            lr (float): ObGD优化器学习率
+            lr (float): Adam优化器学习率
             gamma (float): 动量衰减因子，用于梯度平滑
             lamda (float): 损失函数权重平衡参数
             kappa (float): 损失稳定性参数
@@ -567,7 +544,7 @@ def main():
         input_channels=3,
         base_channels=8,        # 基础通道数（新架构中实际使用固定设计）
         latent_channels=4,     # 潜在空间维度（每个分支的输出通道数）
-        lr=0.007,              # ObGD优化器学习率
+        lr=0.0001,             # Adam优化器学习率
         gamma=0.99,            # 动量衰减因子
         lamda=0.8,             # 损失函数权重平衡参数
         kappa=2.0,             # 损失稳定性参数
