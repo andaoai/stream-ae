@@ -75,8 +75,18 @@ def live_viewer():
     except:
         print("Using untrained model")
 
-    # Setup environment
-    env = gym.make('ALE/Breakout-v5', render_mode='rgb_array')
+    # Setup environment - randomly select from multiple games
+    import random
+    games = [
+        'ALE/Breakout-v5',
+        'ALE/Assault-v5', 
+        'ALE/SpaceInvaders-v5',
+        'ALE/Pacman-v5',
+        'ALE/Asteroids-v5'
+    ]
+    selected_game = random.choice(games)
+    print(f"Selected game: {selected_game}")
+    env = gym.make(selected_game, render_mode='rgb_array')
     obs, _ = env.reset()
 
     try:
