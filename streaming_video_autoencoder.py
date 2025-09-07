@@ -283,12 +283,12 @@ class OptimizedParallelEncoder(nn.Module):
     4. 独立通道设计：每个分支的通道数可以根据其特点进行调整
 
     输出尺寸：
-    - 小卷积分支: 224×224×3 → 27×27×16 (压缩比 69:1)
-    - 中卷积分支: 224×224×3 → 25×25×16 (压缩比 80:1)
-    - 大卷积分支: 224×224×3 → 23×23×16 (压缩比 95:1)
+    - 小卷积分支: 224×224×3 → 27×27×4 (压缩比 69:1)
+    - 中卷积分支: 224×224×3 → 25×25×4 (压缩比 80:1)
+    - 大卷积分支: 224×224×3 → 23×23×4 (压缩比 95:1)
     """
 
-    def __init__(self, input_channels=3, latent_channels=16):
+    def __init__(self, input_channels=3, latent_channels=4):
         super().__init__()
         
         # 小卷积分支 - 纹理特征 (3×3, 无padding)
@@ -303,11 +303,11 @@ class OptimizedParallelEncoder(nn.Module):
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 55×55×24 → 27×27×16
-            nn.Conv2d(24, 16, 3, stride=2, padding=0),  # 无padding
+            # 55×55×24 → 27×27×4
+            nn.Conv2d(24, 4, 3, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 27×27×16
+        )  # 输出: 27×27×4
         
         # 中卷积分支 - 平衡特征 (5×5, 无padding)
         self.medium_kernel_branch = nn.Sequential(
@@ -321,11 +321,11 @@ class OptimizedParallelEncoder(nn.Module):
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 53×53×24 → 25×25×16
-            nn.Conv2d(24, 16, 5, stride=2, padding=0),  # 无padding
+            # 53×53×24 → 25×25×4
+            nn.Conv2d(24, 4, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 25×25×16
+        )  # 输出: 25×25×4
         
         # 大卷积分支 - 结构特征 (7×7, 无padding)
         self.large_kernel_branch = nn.Sequential(
@@ -339,16 +339,16 @@ class OptimizedParallelEncoder(nn.Module):
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 52×52×24 → 23×23×16
-            nn.Conv2d(24, 16, 7, stride=2, padding=0),  # 无padding
+            # 52×52×24 → 23×23×4
+            nn.Conv2d(24, 4, 7, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 23×23×16
+        )  # 输出: 23×23×4
     
     def forward(self, x):
-        small_emb = self.small_kernel_branch(x)    # 27×27×16
-        medium_emb = self.medium_kernel_branch(x)  # 25×25×16
-        large_emb = self.large_kernel_branch(x)    # 23×23×16
+        small_emb = self.small_kernel_branch(x)    # 27×27×4
+        medium_emb = self.medium_kernel_branch(x)  # 25×25×4
+        large_emb = self.large_kernel_branch(x)    # 23×23×4
         
         return small_emb, medium_emb, large_emb
 
@@ -358,9 +358,9 @@ class OptimizedParallelDecoder(nn.Module):
     优化的并行多尺度解码器
 
     该解码器实现了三个并行分支，每个分支对应编码器的一个分支：
-    - 小卷积分支解码器: 从27×27×16重建到223×223×3
-    - 中卷积分支解码器: 从25×25×16重建到221×221×3  
-    - 大卷积分支解码器: 从23×23×16重建到219×219×3
+    - 小卷积分支解码器: 从27×27×4重建到223×223×3
+    - 中卷积分支解码器: 从25×25×4重建到221×221×3  
+    - 大卷积分支解码器: 从23×23×4重建到219×219×3
 
     核心特性：
     1. 对称设计：每个解码器分支与其对应的编码器分支结构对称
@@ -374,13 +374,13 @@ class OptimizedParallelDecoder(nn.Module):
     3. 卷积融合：使用1×1卷积进行特征融合和降维
     """
 
-    def __init__(self, latent_channels=16, output_channels=3):
+    def __init__(self, latent_channels=4, output_channels=3):
         super().__init__()
         
         # 小卷积分支解码器 (纹理特征)
         self.small_decoder = nn.Sequential(
-            # 27×27×16 → 55×55×24
-            nn.ConvTranspose2d(16, 24, 3, stride=2, padding=0),  # 无padding
+            # 27×27×4 → 55×55×24
+            nn.ConvTranspose2d(4, 24, 3, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
@@ -396,8 +396,8 @@ class OptimizedParallelDecoder(nn.Module):
         
         # 中卷积分支解码器 (平衡特征)
         self.medium_decoder = nn.Sequential(
-            # 25×25×16 → 53×53×24
-            nn.ConvTranspose2d(16, 24, 5, stride=2, padding=0),  # 无padding
+            # 25×25×4 → 53×53×24
+            nn.ConvTranspose2d(4, 24, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
@@ -413,8 +413,8 @@ class OptimizedParallelDecoder(nn.Module):
         
         # 大卷积分支解码器 (结构特征)
         self.large_decoder = nn.Sequential(
-            # 23×23×16 → 51×51×24
-            nn.ConvTranspose2d(16, 24, 7, stride=2, padding=0),  # 无padding
+            # 23×23×4 → 51×51×24
+            nn.ConvTranspose2d(4, 24, 7, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
@@ -463,15 +463,15 @@ class StreamingAutoEncoder(nn.Module):
 
     架构设计：
     1. 并行编码器：三个不同尺度的卷积分支并行处理
-       - 小卷积分支 (3×3): 224×224×3 → 27×27×16，纹理特征
-       - 中卷积分支 (5×5): 224×224×3 → 25×25×16，平衡特征  
-       - 大卷积分支 (7×7): 224×224×3 → 23×23×16，结构特征
+       - 小卷积分支 (3×3): 224×224×3 → 27×27×4，纹理特征
+       - 中卷积分支 (5×5): 224×224×3 → 25×25×4，平衡特征  
+       - 大卷积分支 (7×7): 224×224×3 → 23×23×4，结构特征
        - 压缩比：69:1, 80:1, 95:1
 
     2. 并行解码器：三个对应的解码分支并行重建
-       - 小卷积分支解码器: 27×27×16 → 223×223×3
-       - 中卷积分支解码器: 25×25×16 → 221×221×3
-       - 大卷积分支解码器: 23×23×16 → 219×219×3
+       - 小卷积分支解码器: 27×27×4 → 223×223×3
+       - 中卷积分支解码器: 25×25×4 → 221×221×3
+       - 大卷积分支解码器: 23×23×4 → 219×219×3
        - 自适应融合: 统一尺寸并融合为224×224×3
 
     核心优势：
@@ -494,7 +494,7 @@ class StreamingAutoEncoder(nn.Module):
     - TensorBoard集成监控训练过程
     """
 
-    def __init__(self, input_channels=3, base_channels=8, latent_channels=16,
+    def __init__(self, input_channels=3, base_channels=8, latent_channels=4,
                  lr=1.0, gamma=0.99, lamda=0.8, kappa=2.0, 
                  debug_vis=False, use_tensorboard=True, log_dir=None):
         """
@@ -682,7 +682,7 @@ class StreamingAutoEncoder(nn.Module):
                 if self.debug_vis:
                     # 小卷积分支 (3×3) - 纹理特征
                     if 'small_embedding' in self.feature_maps:
-                        small_emb = self.feature_maps['small_embedding'][0]  # [16, 27, 27]
+                        small_emb = self.feature_maps['small_embedding'][0]  # [4, 27, 27]
                         # 显示前4个通道
                         for i in range(min(4, small_emb.shape[0])):
                             channel_vis = (small_emb[i] - small_emb[i].min()) / (small_emb[i].max() - small_emb[i].min() + 1e-8)
@@ -692,7 +692,7 @@ class StreamingAutoEncoder(nn.Module):
                     
                     # 中卷积分支 (5×5) - 平衡特征
                     if 'medium_embedding' in self.feature_maps:
-                        medium_emb = self.feature_maps['medium_embedding'][0]  # [16, 25, 25]
+                        medium_emb = self.feature_maps['medium_embedding'][0]  # [4, 25, 25]
                         # 显示前4个通道
                         for i in range(min(4, medium_emb.shape[0])):
                             channel_vis = (medium_emb[i] - medium_emb[i].min()) / (medium_emb[i].max() - medium_emb[i].min() + 1e-8)
@@ -702,7 +702,7 @@ class StreamingAutoEncoder(nn.Module):
                     
                     # 大卷积分支 (7×7) - 结构特征
                     if 'large_embedding' in self.feature_maps:
-                        large_emb = self.feature_maps['large_embedding'][0]  # [16, 23, 23]
+                        large_emb = self.feature_maps['large_embedding'][0]  # [4, 23, 23]
                         # 显示前4个通道
                         for i in range(min(4, large_emb.shape[0])):
                             channel_vis = (large_emb[i] - large_emb[i].min()) / (large_emb[i].max() - large_emb[i].min() + 1e-8)
@@ -778,40 +778,40 @@ class StreamingAutoEncoder(nn.Module):
         
         # 小卷积分支 (3×3) - 纹理特征
         if 'small_embedding' in self.feature_maps:
-            small_emb = self.feature_maps['small_embedding'][0]  # [16, 27, 27]
+            small_emb = self.feature_maps['small_embedding'][0]  # [4, 27, 27]
             summary['small_kernel'] = {
                 'shape': tuple(small_emb.shape),
                 'mean': small_emb.mean().item(),
                 'std': small_emb.std().item(),
                 'min': small_emb.min().item(),
                 'max': small_emb.max().item(),
-                'compression_ratio': (224*224*3) / (27*27*16),
+                'compression_ratio': (224*224*3) / (27*27*4),
                 'description': '3×3卷积核 - 纹理特征'
             }
         
         # 中卷积分支 (5×5) - 平衡特征
         if 'medium_embedding' in self.feature_maps:
-            medium_emb = self.feature_maps['medium_embedding'][0]  # [16, 25, 25]
+            medium_emb = self.feature_maps['medium_embedding'][0]  # [4, 25, 25]
             summary['medium_kernel'] = {
                 'shape': tuple(medium_emb.shape),
                 'mean': medium_emb.mean().item(),
                 'std': medium_emb.std().item(),
                 'min': medium_emb.min().item(),
                 'max': medium_emb.max().item(),
-                'compression_ratio': (224*224*3) / (25*25*16),
+                'compression_ratio': (224*224*3) / (25*25*4),
                 'description': '5×5卷积核 - 平衡特征'
             }
         
         # 大卷积分支 (7×7) - 结构特征
         if 'large_embedding' in self.feature_maps:
-            large_emb = self.feature_maps['large_embedding'][0]  # [16, 23, 23]
+            large_emb = self.feature_maps['large_embedding'][0]  # [4, 23, 23]
             summary['large_kernel'] = {
                 'shape': tuple(large_emb.shape),
                 'mean': large_emb.mean().item(),
                 'std': large_emb.std().item(),
                 'min': large_emb.min().item(),
                 'max': large_emb.max().item(),
-                'compression_ratio': (224*224*3) / (23*23*16),
+                'compression_ratio': (224*224*3) / (23*23*4),
                 'description': '7×7卷积核 - 结构特征'
             }
         
@@ -933,7 +933,7 @@ def main():
     model = StreamingAutoEncoder(
         input_channels=3,
         base_channels=8,        # 基础通道数（新架构中实际使用固定设计）
-        latent_channels=16,     # 潜在空间维度（每个分支的输出通道数）
+        latent_channels=4,     # 潜在空间维度（每个分支的输出通道数）
         lr=0.001,              # ObGD优化器学习率
         gamma=0.99,            # 动量衰减因子
         lamda=0.8,             # 损失函数权重平衡参数
