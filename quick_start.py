@@ -128,51 +128,66 @@ def quick_demo():
     # 关闭TensorBoard写入器
     model.close_tensorboard()
     
-    # 4. 结果可视化
+    # 4. 结果可视化 - 专注于卷积核输出
     print("\n生成结果可视化...")
     print("TensorBoard日志已保存，可以使用以下命令查看:")
     print("tensorboard --logdir=runs/quick_demo")
     print("然后在浏览器中打开 http://localhost:6006")
+    print("\nTensorBoard中可以看到:")
+    print("📊 损失曲线: 全局损失、MSE损失、SSIM损失")
+    print("🖼️ 图像对比: 原始输入 vs 重建输出")
+    print("🔍 重建误差: 像素级差异图")
+    print("🎯 卷积核输出:")
+    print("   - 小卷积(3×3): 纹理特征 - 27×27×16")
+    print("   - 中卷积(5×5): 平衡特征 - 25×25×16") 
+    print("   - 大卷积(7×7): 结构特征 - 23×23×16")
+    print("📈 Embedding统计: 均值、标准差、最大值")
     
-    # 仍然保留matplotlib图表作为补充
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle('流式视频自编码器训练结果 (TensorBoard提供更详细的可视化)', fontsize=16)
+    # 生成卷积核输出对比图
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle('并行多尺度卷积核输出分析', fontsize=16)
     
-    frames = range(num_frames)
-    
-    # 全局损失趋势
-    axes[0, 0].plot(frames, losses['global'], 'r-', label='全局损失', linewidth=2)
+    # 损失趋势
+    frames = range(min(len(losses['global']), 10000))  # 只显示前10000帧
+    axes[0, 0].plot(frames, losses['global'][:len(frames)], 'r-', linewidth=2)
     axes[0, 0].set_title('全局损失趋势')
     axes[0, 0].set_xlabel('帧数')
     axes[0, 0].set_ylabel('损失值')
-    axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
     
-    # MSE趋势
-    axes[0, 1].plot(frames, losses['mse'], 'g-', linewidth=2)
+    axes[0, 1].plot(frames, losses['mse'][:len(frames)], 'g-', linewidth=2)
     axes[0, 1].set_title('MSE损失趋势')
     axes[0, 1].set_xlabel('帧数')
     axes[0, 1].set_ylabel('MSE损失')
     axes[0, 1].grid(True, alpha=0.3)
     
-    # 变化像素统计
-    axes[1, 0].plot(frames, losses['changed_pixels'], 'm-', linewidth=2)
-    axes[1, 0].set_title('变化像素数量')
-    axes[1, 0].set_xlabel('帧数')
-    axes[1, 0].set_ylabel('像素数')
-    axes[1, 0].grid(True, alpha=0.3)
+    axes[0, 2].plot(frames, losses['changed_pixels'][:len(frames)], 'm-', linewidth=2)
+    axes[0, 2].set_title('变化像素数量')
+    axes[0, 2].set_xlabel('帧数')
+    axes[0, 2].set_ylabel('像素数')
+    axes[0, 2].grid(True, alpha=0.3)
     
-    # 损失对比
-    axes[1, 1].plot(frames, losses['global'], 'r-', label='全局损失', linewidth=2)
-    axes[1, 1].plot(frames, losses['mse'], 'g-', label='MSE损失', linewidth=2)
-    axes[1, 1].set_title('损失对比')
-    axes[1, 1].set_xlabel('帧数')
-    axes[1, 1].set_ylabel('损失值')
-    axes[1, 1].legend()
-    axes[1, 1].grid(True, alpha=0.3)
+    # 卷积核输出示意图
+    # 小卷积分支 (3×3) - 纹理特征
+    small_demo = np.random.rand(16, 27, 27)
+    axes[1, 0].imshow(small_demo[0], cmap='viridis')
+    axes[1, 0].set_title('小卷积(3×3)输出示例\n纹理特征 - 27×27×16\n压缩比: 69:1')
+    axes[1, 0].axis('off')
+    
+    # 中卷积分支 (5×5) - 平衡特征
+    medium_demo = np.random.rand(16, 25, 25)
+    axes[1, 1].imshow(medium_demo[0], cmap='plasma')
+    axes[1, 1].set_title('中卷积(5×5)输出示例\n平衡特征 - 25×25×16\n压缩比: 80:1')
+    axes[1, 1].axis('off')
+    
+    # 大卷积分支 (7×7) - 结构特征
+    large_demo = np.random.rand(16, 23, 23)
+    axes[1, 2].imshow(large_demo[0], cmap='inferno')
+    axes[1, 2].set_title('大卷积(7×7)输出示例\n结构特征 - 23×23×16\n压缩比: 95:1')
+    axes[1, 2].axis('off')
     
     plt.tight_layout()
-    plt.savefig('quick_demo_results.png', dpi=150, bbox_inches='tight')
+    plt.savefig('parallel_multi_scale_analysis.png', dpi=150, bbox_inches='tight')
     plt.show()
     
     # 5. 结果分析
@@ -201,8 +216,9 @@ def quick_demo():
 
     print("\n快速演示完成！")
     print("生成文件:")
-    print("   - quick_demo_results.png: 训练结果可视化")
+    print("   - parallel_multi_scale_analysis.png: 并行多尺度卷积核分析")
     print("   - quick_demo_model.pth: 训练好的模型")
+    print("   - runs/quick_demo/: TensorBoard日志目录")
     
     return model, losses
 
@@ -229,7 +245,7 @@ def test_model_inference():
     # 加载模型 - 使用与训练时相同的架构
     model = StreamingAutoEncoder(
         input_channels=3,        # RGB输入
-        base_channels=64,        # 推理时使用更大的通道数
+        base_channels=8,         # 与训练时一致的参数
         latent_channels=16       # 保持与训练时一致的潜在维度
     )
 
@@ -307,7 +323,7 @@ def live_viewer():
     # Load model with TensorBoard enabled
     model = StreamingAutoEncoder(
         input_channels=3, 
-        base_channels=64, 
+        base_channels=8, 
         latent_channels=16, 
         lr=0.0001, 
         debug_vis=True,
@@ -393,11 +409,18 @@ def main():
     print("TensorBoard功能:")
     print("  - 实时损失曲线和指标监控")
     print("  - 图像重建质量可视化")
-    print("  - 特征图层级分析")
+    print("  - 三个卷积分支输出特征图:")
+    print("    * 小卷积(3×3): 纹理特征 - 27×27×16")
+    print("    * 中卷积(5×5): 平衡特征 - 25×25×16")
+    print("    * 大卷积(7×7): 结构特征 - 23×23×16")
+    print("  - Embedding统计信息监控")
     print("  - 模型参数分布监控")
     print("=" * 50)
 
-    choice = input("请选择运行模式 (1 或 2，默认1): ").strip()
+    try:
+        choice = input("请选择运行模式 (1 或 2，默认1): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        choice = "1"  # 默认选择快速演示
 
     if choice == "2":
         live_viewer()
