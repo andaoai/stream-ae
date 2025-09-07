@@ -49,11 +49,12 @@ def live_viewer():
     - Ctrl+C: 停止运行
     - TensorBoard: 在浏览器中查看 http://localhost:6006
     """
-    print("Real-time Live Viewer with TensorBoard")
-    print("TensorBoard将在浏览器中显示实时监控信息")
+    print("Real-time Live Viewer with TensorBoard - REAL-TIME MODE")
+    print("TensorBoard将在浏览器中显示实时监控信息 - 每帧刷新")
     print("启动TensorBoard: tensorboard --logdir=runs")
+    print("注意：现在每帧都会实时刷新TensorBoard！")
 
-    # Load model with TensorBoard enabled
+    # Load model with TensorBoard enabled - using flush mechanism for real-time updates
     model = StreamingAutoEncoder(
         input_channels=3, 
         base_channels=8, 
@@ -63,6 +64,11 @@ def live_viewer():
         use_tensorboard=True,
         log_dir=f"runs/live_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
+    
+    # Enable TensorBoard flush for real-time updates
+    if model.writer is not None:
+        model.writer.flush()
+        print("TensorBoard flush enabled for real-time updates")
     try:
         model.load_state_dict(torch.load('quick_demo_model.pth'))
         print("Model loaded")
@@ -79,9 +85,13 @@ def live_viewer():
         print("然后在浏览器中打开: http://localhost:6006")
         i = 0
         while True:  # 持续运行
-            # Process current frame
+            # Process current frame - debug=True for every frame with TensorBoard flush
             curr_frame = preprocess_frame(obs)
-            results = model.update_params(curr_frame, debug=(i % 100 == 0))
+            results = model.update_params(curr_frame, debug=True)
+            
+            # Flush TensorBoard after each frame for real-time updates
+            if model.writer is not None:
+                model.writer.flush()
 
             # Environment step
             action = env.action_space.sample()
@@ -97,6 +107,7 @@ def live_viewer():
             if i % 100 == 0:
                 print(f"Frame {i}: Global={results['global_loss']:.3f}, MSE={results['mse_loss']:.3f}")
                 print(f"  Changed Pixels={results['changed_pixels']:.0f}")
+                print(f"  TensorBoard real-time flushing enabled")
 
     except KeyboardInterrupt:
         print("Stopped by user")

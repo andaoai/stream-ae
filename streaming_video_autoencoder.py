@@ -38,6 +38,7 @@ from collections import deque
 from torch.utils.tensorboard import SummaryWriter
 import os
 from datetime import datetime
+import time
 
 class LayerNormalization(nn.Module):
     """
@@ -293,54 +294,54 @@ class OptimizedParallelEncoder(nn.Module):
         
         # 小卷积分支 - 纹理特征 (3×3, 无padding)
         self.small_kernel_branch = nn.Sequential(
-            # 224×224×3 → 111×111×32
-            nn.Conv2d(3, 32, 3, stride=2, padding=0),  # 无padding
+            # 224×224×3 → 111×111×16
+            nn.Conv2d(3, 16, 3, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 111×111×32 → 55×55×24
-            nn.Conv2d(32, 24, 3, stride=2, padding=0),  # 无padding
+            # 111×111×16 → 55×55×12
+            nn.Conv2d(16, 12, 3, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 55×55×24 → 27×27×4
-            nn.Conv2d(24, 4, 3, stride=2, padding=0),  # 无padding
+            # 55×55×12 → 27×27×4
+            nn.Conv2d(12, 4, 3, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
         )  # 输出: 27×27×4
         
         # 中卷积分支 - 平衡特征 (5×5, 无padding)
         self.medium_kernel_branch = nn.Sequential(
-            # 224×224×3 → 110×110×32
-            nn.Conv2d(3, 32, 5, stride=2, padding=0),  # 无padding
+            # 224×224×3 → 110×110×16
+            nn.Conv2d(3, 16, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 110×110×32 → 53×53×24
-            nn.Conv2d(32, 24, 5, stride=2, padding=0),  # 无padding
+            # 110×110×16 → 53×53×12
+            nn.Conv2d(16, 12, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 53×53×24 → 25×25×4
-            nn.Conv2d(24, 4, 5, stride=2, padding=0),  # 无padding
+            # 53×53×12 → 25×25×4
+            nn.Conv2d(12, 4, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
         )  # 输出: 25×25×4
         
         # 大卷积分支 - 结构特征 (7×7, 无padding)
         self.large_kernel_branch = nn.Sequential(
-            # 224×224×3 → 109×109×32
-            nn.Conv2d(3, 32, 7, stride=2, padding=0),  # 无padding
+            # 224×224×3 → 109×109×16
+            nn.Conv2d(3, 16, 7, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 109×109×32 → 52×52×24
-            nn.Conv2d(32, 24, 7, stride=2, padding=0),  # 无padding
+            # 109×109×16 → 52×52×12
+            nn.Conv2d(16, 12, 7, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 52×52×24 → 23×23×4
-            nn.Conv2d(24, 4, 7, stride=2, padding=0),  # 无padding
+            # 52×52×12 → 23×23×4
+            nn.Conv2d(12, 4, 7, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
         )  # 输出: 23×23×4
@@ -379,52 +380,52 @@ class OptimizedParallelDecoder(nn.Module):
         
         # 小卷积分支解码器 (纹理特征)
         self.small_decoder = nn.Sequential(
-            # 27×27×4 → 55×55×24
-            nn.ConvTranspose2d(4, 24, 3, stride=2, padding=0),  # 无padding
+            # 27×27×4 → 55×55×12
+            nn.ConvTranspose2d(4, 12, 3, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 55×55×24 → 111×111×32
-            nn.ConvTranspose2d(24, 32, 3, stride=2, padding=0),  # 无padding
+            # 55×55×12 → 111×111×16
+            nn.ConvTranspose2d(12, 16, 3, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 111×111×32 → 223×223×3
-            nn.ConvTranspose2d(32, 3, 3, stride=2, padding=0),  # 无padding
+            # 111×111×16 → 223×223×3
+            nn.ConvTranspose2d(16, 3, 3, stride=2, padding=0),  # 无padding
             nn.Sigmoid()
         )  # 输出: 223×223×3
         
         # 中卷积分支解码器 (平衡特征)
         self.medium_decoder = nn.Sequential(
-            # 25×25×4 → 53×53×24
-            nn.ConvTranspose2d(4, 24, 5, stride=2, padding=0),  # 无padding
+            # 25×25×4 → 53×53×12
+            nn.ConvTranspose2d(4, 12, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 53×53×24 → 109×109×32
-            nn.ConvTranspose2d(24, 32, 5, stride=2, padding=0),  # 无padding
+            # 53×53×12 → 109×109×16
+            nn.ConvTranspose2d(12, 16, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 109×109×32 → 221×221×3
-            nn.ConvTranspose2d(32, 3, 5, stride=2, padding=0),  # 无padding
+            # 109×109×16 → 221×221×3
+            nn.ConvTranspose2d(16, 3, 5, stride=2, padding=0),  # 无padding
             nn.Sigmoid()
         )  # 输出: 221×221×3
         
         # 大卷积分支解码器 (结构特征)
         self.large_decoder = nn.Sequential(
-            # 23×23×4 → 51×51×24
-            nn.ConvTranspose2d(4, 24, 7, stride=2, padding=0),  # 无padding
+            # 23×23×4 → 51×51×12
+            nn.ConvTranspose2d(4, 12, 7, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 51×51×24 → 107×107×32
-            nn.ConvTranspose2d(24, 32, 7, stride=2, padding=0),  # 无padding
+            # 51×51×12 → 107×107×16
+            nn.ConvTranspose2d(12, 16, 7, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 107×107×32 → 219×219×3
-            nn.ConvTranspose2d(32, 3, 7, stride=2, padding=0),  # 无padding
+            # 107×107×16 → 219×219×3
+            nn.ConvTranspose2d(16, 3, 7, stride=2, padding=0),  # 无padding
             nn.Sigmoid()
         )  # 输出: 219×219×3
         
@@ -522,6 +523,12 @@ class StreamingAutoEncoder(nn.Module):
         self.use_tensorboard = use_tensorboard
         self.writer = None
         self.global_step = 0
+        
+        # 性能监控
+        self.start_time = time.time()
+        self.last_step_time = self.start_time
+        self.step_times = deque(maxlen=100)  # 保存最近100步的时间
+        self.fps_history = deque(maxlen=100)  # 保存最近100步的FPS
         
         if self.use_tensorboard:
             if log_dir is None:
@@ -631,6 +638,20 @@ class StreamingAutoEncoder(nn.Module):
         """
         参数更新：使用单一全局损失和ObGD优化器
         """
+        # 计算FPS
+        current_time = time.time()
+        step_time = current_time - self.last_step_time
+        self.step_times.append(step_time)
+        
+        # 计算当前FPS
+        if step_time > 0:
+            current_fps = 1.0 / step_time
+        else:
+            current_fps = 0.0
+        self.fps_history.append(current_fps)
+        
+        self.last_step_time = current_time
+        
         # 前向传播
         reconstruction, embeddings = self.forward(curr_frame)
         small_emb, medium_emb, large_emb = embeddings
@@ -662,6 +683,16 @@ class StreamingAutoEncoder(nn.Module):
             self.writer.add_scalar('Loss/L1_Loss', l1_loss.item(), self.global_step)
             self.writer.add_scalar('Loss/SSIM_Loss', ssim_loss.item(), self.global_step)
             self.writer.add_scalar('Metrics/Changed_Pixels', torch.sum(change_mask).item(), self.global_step)
+            
+            # 性能监控
+            self.writer.add_scalar('Performance/Current_FPS', current_fps, self.global_step)
+            if len(self.fps_history) > 0:
+                avg_fps = sum(self.fps_history) / len(self.fps_history)
+                self.writer.add_scalar('Performance/Average_FPS', avg_fps, self.global_step)
+            
+            # 计算总运行时间
+            total_time = current_time - self.start_time
+            self.writer.add_scalar('Performance/Total_Time', total_time, self.global_step)
             
             # 每20步记录卷积核输出（降低频率，专注于重要信息）
             if self.global_step % 20 == 0:
@@ -732,7 +763,11 @@ class StreamingAutoEncoder(nn.Module):
             self.global_step += 1
         
         if debug:
-            print(f"Step {self.global_step}: Global={global_loss.item():.1f}, MSE={mse_loss.item():.1f}")
+            if len(self.fps_history) > 0:
+                avg_fps = sum(self.fps_history) / len(self.fps_history)
+                print(f"Step {self.global_step}: Global={global_loss.item():.1f}, MSE={mse_loss.item():.1f}, FPS={current_fps:.1f}, AvgFPS={avg_fps:.1f}")
+            else:
+                print(f"Step {self.global_step}: Global={global_loss.item():.1f}, MSE={mse_loss.item():.1f}, FPS={current_fps:.1f}")
             # 打印卷积核输出摘要
             self.print_kernel_outputs()
         
@@ -741,6 +776,8 @@ class StreamingAutoEncoder(nn.Module):
             'mse_loss': mse_loss.item(),
             'ssim_loss': ssim_loss.item(),
             'changed_pixels': torch.sum(change_mask).item(),
+            'current_fps': current_fps,
+            'average_fps': sum(self.fps_history) / len(self.fps_history) if len(self.fps_history) > 0 else 0.0,
             'reconstruction': reconstruction.detach(),
             'embedding': embeddings,  # 返回三个embedding的元组
             'change_mask': change_mask.detach()
@@ -838,6 +875,45 @@ class StreamingAutoEncoder(nn.Module):
             print(f"  标准差: {info['std']:.4f}")
         
         print("\n" + "=" * 60)
+    
+    def print_performance_summary(self):
+        """打印性能监控摘要信息"""
+        current_time = time.time()
+        total_time = current_time - self.start_time
+        
+        print("=" * 60)
+        print("性能监控摘要")
+        print("=" * 60)
+        
+        # 基本性能指标
+        print(f"总运行时间: {total_time:.2f} 秒")
+        print(f"总步数: {self.global_step}")
+        
+        if total_time > 0:
+            overall_fps = self.global_step / total_time
+            print(f"整体FPS: {overall_fps:.2f}")
+        
+        # 最近性能指标
+        if len(self.fps_history) > 0:
+            recent_fps = sum(self.fps_history) / len(self.fps_history)
+            max_fps = max(self.fps_history)
+            min_fps = min(self.fps_history)
+            
+            print(f"最近平均FPS: {recent_fps:.2f}")
+            print(f"最高FPS: {max_fps:.2f}")
+            print(f"最低FPS: {min_fps:.2f}")
+        
+        # 步骤时间统计
+        if len(self.step_times) > 0:
+            avg_step_time = sum(self.step_times) / len(self.step_times)
+            max_step_time = max(self.step_times)
+            min_step_time = min(self.step_times)
+            
+            print(f"平均步骤时间: {avg_step_time:.4f} 秒")
+            print(f"最长步骤时间: {max_step_time:.4f} 秒")
+            print(f"最短步骤时间: {min_step_time:.4f} 秒")
+        
+        print("=" * 60)
 
     def get_all_layer_info(self):
         """获取所有层的信息"""
@@ -957,7 +1033,9 @@ def main():
     loss_history = {
         'global_loss': [],
         'mse_loss': [],
-        'changed_pixels': []
+        'changed_pixels': [],
+        'current_fps': [],
+        'average_fps': []
     }
     
     try:
@@ -969,10 +1047,12 @@ def main():
             debug = (frame_count % debug_interval == 0)
             results = model.update_params(curr_frame, debug=debug)
             
-            # 记录损失
+            # 记录损失和FPS
             loss_history['global_loss'].append(results['global_loss'])
             loss_history['mse_loss'].append(results['mse_loss'])
             loss_history['changed_pixels'].append(results['changed_pixels'])
+            loss_history['current_fps'].append(results['current_fps'])
+            loss_history['average_fps'].append(results['average_fps'])
             
             # 随机动作
             action = env.action_space.sample()
@@ -992,11 +1072,15 @@ def main():
                 recent_global = np.mean(loss_history['global_loss'][-debug_interval:])
                 recent_mse = np.mean(loss_history['mse_loss'][-debug_interval:])
                 recent_changed = np.mean(loss_history['changed_pixels'][-debug_interval:])
+                recent_fps = np.mean(loss_history['current_fps'][-debug_interval:])
+                recent_avg_fps = np.mean(loss_history['average_fps'][-debug_interval:])
                 
                 print(f"Frame {frame_count}/{total_frames}")
                 print(f"  平均全局损失: {recent_global:.6f}")
                 print(f"  平均MSE损失: {recent_mse:.6f}")
                 print(f"  平均变化像素: {recent_changed:.0f}")
+                print(f"  当前FPS: {recent_fps:.2f}")
+                print(f"  平均FPS: {recent_avg_fps:.2f}")
                 print("-" * 50)
     
     except KeyboardInterrupt:
@@ -1005,6 +1089,9 @@ def main():
     finally:
         env.close()
         print("训练完成！")
+        
+        # 打印性能摘要
+        model.print_performance_summary()
         
         # 保存模型
         torch.save(model.state_dict(), 'streaming_autoencoder.pth')
