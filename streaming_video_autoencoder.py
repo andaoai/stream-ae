@@ -284,9 +284,9 @@ class OptimizedParallelEncoder(nn.Module):
     4. 独立通道设计：每个分支的通道数可以根据其特点进行调整
 
     输出尺寸：
-    - 小卷积分支: 224×224×3 → 27×27×4 (压缩比 69:1)
-    - 中卷积分支: 224×224×3 → 25×25×4 (压缩比 80:1)
-    - 大卷积分支: 224×224×3 → 23×23×4 (压缩比 95:1)
+    - 小卷积分支: 224×224×3 → 27×27×3 (压缩比 92:1)
+    - 中卷积分支: 224×224×3 → 25×25×2 (压缩比 161:1)
+    - 大卷积分支: 224×224×3 → 23×23×2 (压缩比 190:1)
     """
 
     def __init__(self, input_channels=3, latent_channels=4):
@@ -304,11 +304,11 @@ class OptimizedParallelEncoder(nn.Module):
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 55×55×12 → 27×27×4
-            nn.Conv2d(12, 4, 3, stride=2, padding=0),  # 无padding
+            # 55×55×12 → 27×27×3
+            nn.Conv2d(12, 3, 3, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 27×27×4
+        )  # 输出: 27×27×3
         
         # 中卷积分支 - 平衡特征 (5×5, 无padding)
         self.medium_kernel_branch = nn.Sequential(
@@ -322,11 +322,11 @@ class OptimizedParallelEncoder(nn.Module):
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 53×53×12 → 25×25×4
-            nn.Conv2d(12, 4, 5, stride=2, padding=0),  # 无padding
+            # 53×53×12 → 25×25×2
+            nn.Conv2d(12, 2, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 25×25×4
+        )  # 输出: 25×25×2
         
         # 大卷积分支 - 结构特征 (7×7, 无padding)
         self.large_kernel_branch = nn.Sequential(
@@ -340,16 +340,16 @@ class OptimizedParallelEncoder(nn.Module):
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 52×52×12 → 23×23×4
-            nn.Conv2d(12, 4, 7, stride=2, padding=0),  # 无padding
+            # 52×52×12 → 23×23×2
+            nn.Conv2d(12, 2, 7, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 23×23×4
+        )  # 输出: 23×23×2
     
     def forward(self, x):
-        small_emb = self.small_kernel_branch(x)    # 27×27×4
-        medium_emb = self.medium_kernel_branch(x)  # 25×25×4
-        large_emb = self.large_kernel_branch(x)    # 23×23×4
+        small_emb = self.small_kernel_branch(x)    # 27×27×3
+        medium_emb = self.medium_kernel_branch(x)  # 25×25×2
+        large_emb = self.large_kernel_branch(x)    # 23×23×2
         
         return small_emb, medium_emb, large_emb
 
@@ -366,13 +366,16 @@ class OptimizedParallelDecoder(nn.Module):
     核心特性：
     1. 对称设计：每个解码器分支与其对应的编码器分支结构对称
     2. 无填充策略：所有转置卷积不使用padding，保持边缘真实性
-    3. 自适应融合：将不同尺寸的重建图像融合为最终输出
-    4. 尺寸统一：使用双线性插值将不同尺寸的重建图像统一到224×224
+    3. 直接特征融合：将多尺度特征直接合并，不在中间层应用sigmoid
+    4. 最终sigmoid：只在最终输出层应用sigmoid激活函数
+    5. 尺寸统一：使用双线性插值将不同尺寸的重建图像统一到224×224
 
     融合策略：
-    1. 尺寸统一：将三个重建图像上采样到224×224
-    2. 通道拼接：将三个图像按通道维度拼接 (224×224×9)
-    3. 卷积融合：使用1×1卷积进行特征融合和降维
+    1. 并行解码：三个分支同时解码，输出原始特征值
+    2. 尺寸统一：将三个重建图像上采样到224×224
+    3. 通道拼接：将三个图像按通道维度拼接 (224×224×9)
+    4. 特征融合：使用1×1卷积进行特征融合和降维
+    5. 最终激活：只在最终输出应用sigmoid确保输出范围[0,1]
     """
 
     def __init__(self, latent_channels=4, output_channels=3):
@@ -380,8 +383,8 @@ class OptimizedParallelDecoder(nn.Module):
         
         # 小卷积分支解码器 (纹理特征)
         self.small_decoder = nn.Sequential(
-            # 27×27×4 → 55×55×12
-            nn.ConvTranspose2d(4, 12, 3, stride=2, padding=0),  # 无padding
+            # 27×27×3 → 55×55×12
+            nn.ConvTranspose2d(3, 12, 3, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
@@ -391,14 +394,13 @@ class OptimizedParallelDecoder(nn.Module):
             nn.LeakyReLU(),
             
             # 111×111×16 → 223×223×3
-            nn.ConvTranspose2d(16, 3, 3, stride=2, padding=0),  # 无padding
-            nn.Sigmoid()
+            nn.ConvTranspose2d(16, 3, 3, stride=2, padding=0)  # 无padding，无sigmoid
         )  # 输出: 223×223×3
         
         # 中卷积分支解码器 (平衡特征)
         self.medium_decoder = nn.Sequential(
-            # 25×25×4 → 53×53×12
-            nn.ConvTranspose2d(4, 12, 5, stride=2, padding=0),  # 无padding
+            # 25×25×2 → 53×53×12
+            nn.ConvTranspose2d(2, 12, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
@@ -408,14 +410,13 @@ class OptimizedParallelDecoder(nn.Module):
             nn.LeakyReLU(),
             
             # 109×109×16 → 221×221×3
-            nn.ConvTranspose2d(16, 3, 5, stride=2, padding=0),  # 无padding
-            nn.Sigmoid()
+            nn.ConvTranspose2d(16, 3, 5, stride=2, padding=0)  # 无padding，无sigmoid
         )  # 输出: 221×221×3
         
         # 大卷积分支解码器 (结构特征)
         self.large_decoder = nn.Sequential(
-            # 23×23×4 → 51×51×12
-            nn.ConvTranspose2d(4, 12, 7, stride=2, padding=0),  # 无padding
+            # 23×23×2 → 51×51×12
+            nn.ConvTranspose2d(2, 12, 7, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
@@ -425,17 +426,15 @@ class OptimizedParallelDecoder(nn.Module):
             nn.LeakyReLU(),
             
             # 107×107×16 → 219×219×3
-            nn.ConvTranspose2d(16, 3, 7, stride=2, padding=0),  # 无padding
-            nn.Sigmoid()
+            nn.ConvTranspose2d(16, 3, 7, stride=2, padding=0)  # 无padding，无sigmoid
         )  # 输出: 219×219×3
         
-        # 自适应尺寸融合模块
+        # 自适应尺寸融合模块 - 直接合并特征，最后应用sigmoid
         self.adaptive_fusion = nn.Sequential(
             nn.Conv2d(9, 6, 1),  # 融合三个重建结果
             LayerNormalization(),
             nn.LeakyReLU(),
-            nn.Conv2d(6, 3, 1),  # 最终输出
-            nn.Sigmoid()
+            nn.Conv2d(6, 3, 1),  # 最终输出，无sigmoid
         )
     
     def forward(self, small_emb, medium_emb, large_emb):
@@ -453,6 +452,9 @@ class OptimizedParallelDecoder(nn.Module):
         combined = torch.cat([small_recon_up, medium_recon_up, large_recon_up], dim=1)
         final_output = self.adaptive_fusion(combined)
         
+        # 只在最终输出应用sigmoid
+        final_output = torch.sigmoid(final_output)
+        
         return final_output
 
 
@@ -464,15 +466,15 @@ class StreamingAutoEncoder(nn.Module):
 
     架构设计：
     1. 并行编码器：三个不同尺度的卷积分支并行处理
-       - 小卷积分支 (3×3): 224×224×3 → 27×27×4，纹理特征
-       - 中卷积分支 (5×5): 224×224×3 → 25×25×4，平衡特征  
-       - 大卷积分支 (7×7): 224×224×3 → 23×23×4，结构特征
-       - 压缩比：69:1, 80:1, 95:1
+       - 小卷积分支 (3×3): 224×224×3 → 27×27×3，纹理特征
+       - 中卷积分支 (5×5): 224×224×3 → 25×25×2，平衡特征  
+       - 大卷积分支 (7×7): 224×224×3 → 23×23×2，结构特征
+       - 压缩比：92:1, 161:1, 190:1
 
     2. 并行解码器：三个对应的解码分支并行重建
-       - 小卷积分支解码器: 27×27×4 → 223×223×3
-       - 中卷积分支解码器: 25×25×4 → 221×221×3
-       - 大卷积分支解码器: 23×23×4 → 219×219×3
+       - 小卷积分支解码器: 27×27×3 → 223×223×3
+       - 中卷积分支解码器: 25×25×2 → 221×221×3
+       - 大卷积分支解码器: 23×23×2 → 219×219×3
        - 自适应融合: 统一尺寸并融合为224×224×3
 
     核心优势：
@@ -480,7 +482,7 @@ class StreamingAutoEncoder(nn.Module):
     2. 灵活尺寸：每个分支的embedding尺寸独立计算，在12~28范围内
     3. 并行处理：三个分支完全并行，提高计算效率
     4. 多尺度特征：不同卷积核捕获不同类型的特征信息
-    5. 高压缩率：整体压缩比约69:1至95:1，参数量约15万
+    5. 高压缩率：整体压缩比约92:1至190:1，参数量约15万
 
     优化策略（参考streaming-drl）：
     1. ObGD在线学习：无需存储历史数据，适合长时间流式处理
@@ -495,7 +497,7 @@ class StreamingAutoEncoder(nn.Module):
     - TensorBoard集成监控训练过程
     """
 
-    def __init__(self, input_channels=3, base_channels=8, latent_channels=4,
+    def __init__(self, input_channels=3, base_channels=8, latent_channels=3,
                  lr=1.0, gamma=0.99, lamda=0.8, kappa=2.0, 
                  debug_vis=False, use_tensorboard=True, log_dir=None):
         """
@@ -1010,7 +1012,7 @@ def main():
         input_channels=3,
         base_channels=8,        # 基础通道数（新架构中实际使用固定设计）
         latent_channels=4,     # 潜在空间维度（每个分支的输出通道数）
-        lr=0.001,              # ObGD优化器学习率
+        lr=0.007,              # ObGD优化器学习率
         gamma=0.99,            # 动量衰减因子
         lamda=0.8,             # 损失函数权重平衡参数
         kappa=2.0,             # 损失稳定性参数
