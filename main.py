@@ -59,7 +59,7 @@ def live_viewer():
         input_channels=3, 
         base_channels=8, 
         latent_channels=4, 
-        lr=0.0001, 
+        lr=0.01, 
         debug_vis=True,
         use_tensorboard=True,
         log_dir=f"runs/live_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
