@@ -379,56 +379,33 @@ def live_viewer():
 
 def main():
     """
-    主函数 - 流式视频自编码器演示程序入口
+    主函数 - 流式视频自编码器实时可视化监控
 
-    提供两种运行模式：
-    1. Quick Demo (默认) - 完整的训练、测试和分析流程
-       - 自动训练模型500,000帧
-       - 生成详细的性能分析报告
-       - 保存训练结果和可视化图表
-       - 适合批量实验和性能评估
+    直接启动实时可视化查看器，提供：
+    - 实时监控 - 通过TensorBoard显示当前帧、重建输出和差异图
+    - 损失追踪 - 实时记录损失到TensorBoard
+    - 特征可视化 - 记录三个卷积分支的特征图
+    - 性能分析 - 实时检测重建质量
 
-    2. Live Viewer - 实时可视化监控界面
-       - 实时显示训练过程
-       - 多维度性能监控
-       - 交互式调试功能
-       - 适合开发调试和演示展示
-
-    技术特性：
-    - 基于streaming-drl的ObGD优化器
-    - 双损失函数设计（细节+全局）
-    - 内存高效的流式处理
-    - 实时性能监控和可视化
+    TensorBoard功能：
+    - 实时损失曲线和指标监控
+    - 图像重建质量可视化
+    - 三个卷积分支输出特征图:
+      * 小卷积(3×3): 纹理特征 - 27×27×16
+      * 中卷积(5×5): 平衡特征 - 25×25×16
+      * 大卷积(7×7): 结构特征 - 23×23×16
+    - Embedding统计信息监控
+    - 模型参数分布监控
     """
-    print("Streaming Video Autoencoder with TensorBoard")
+    print("Streaming Video Autoencoder - Live Viewer")
     print("基于streaming-drl项目的ObGD优化器实现")
     print("=" * 50)
-    print("1. Quick Demo  - 完整训练和分析流程 (TensorBoard)")
-    print("2. Live Viewer - 实时可视化监控 (TensorBoard)")
+    print("启动实时可视化监控...")
+    print("在另一个终端运行: tensorboard --logdir=runs/live_viewer")
+    print("然后在浏览器中打开: http://localhost:6006")
     print("=" * 50)
-    print("TensorBoard功能:")
-    print("  - 实时损失曲线和指标监控")
-    print("  - 图像重建质量可视化")
-    print("  - 三个卷积分支输出特征图:")
-    print("    * 小卷积(3×3): 纹理特征 - 27×27×16")
-    print("    * 中卷积(5×5): 平衡特征 - 25×25×16")
-    print("    * 大卷积(7×7): 结构特征 - 23×23×16")
-    print("  - Embedding统计信息监控")
-    print("  - 模型参数分布监控")
-    print("=" * 50)
-
-    try:
-        choice = input("请选择运行模式 (1 或 2，默认1): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        choice = "1"  # 默认选择快速演示
-
-    if choice == "2":
-        live_viewer()
-    else:
-        # 运行快速演示
-        print("启动快速演示模式...")
-        model, losses = quick_demo()
-        test_model_inference()
+    
+    live_viewer()
 
 if __name__ == "__main__":
     main()
