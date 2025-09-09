@@ -40,9 +40,9 @@ def live_viewer():
     - 实时损失曲线和指标监控
     - 图像重建质量可视化
     - 三个卷积分支输出特征图:
-      * 小卷积(3×3): 纹理特征 - 27×27×4
-      * 中卷积(5×5): 平衡特征 - 25×25×4
-      * 大卷积(7×7): 结构特征 - 23×23×4
+      * 小卷积(3×3): 纹理特征 - 27×27×3
+      * 中卷积(5×5): 平衡特征 - 25×25×2
+      * 大卷积(7×7): 结构特征 - 23×23×2
     - Embedding统计信息监控
     - 模型参数分布监控
 
@@ -58,8 +58,8 @@ def live_viewer():
     # Load model with TensorBoard enabled - using flush mechanism for real-time updates
     model = create_streaming_ae(
         input_channels=3, 
-        latent_channels=4, 
-        lr=0.01, 
+        latent_channels=3, 
+        lr=1.0, 
         debug_vis=True,
         use_tensorboard=True,
         log_dir=f"runs/live_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -77,6 +77,9 @@ def live_viewer():
 
     # Setup environment - randomly select from multiple games
     import random
+    import ale_py
+    import gymnasium as gym
+    gym.register_envs(ale_py)
     games = [
         'ALE/Breakout-v5',
         'ALE/Assault-v5', 
@@ -140,9 +143,9 @@ def main():
     - 实时损失曲线和指标监控
     - 图像重建质量可视化
     - 三个卷积分支输出特征图:
-      * 小卷积(3×3): 纹理特征 - 27×27×4
-      * 中卷积(5×5): 平衡特征 - 25×25×4
-      * 大卷积(7×7): 结构特征 - 23×23×4
+      * 小卷积(3×3): 纹理特征 - 27×27×3
+      * 中卷积(5×5): 平衡特征 - 25×25×2
+      * 大卷积(7×7): 结构特征 - 23×23×2
     - Embedding统计信息监控
     - 模型参数分布监控
     """
@@ -153,6 +156,8 @@ def main():
     print("在另一个终端运行: tensorboard --logdir=runs")
     print("然后在浏览器中打开: http://localhost:6006")
     print("=" * 50)
+    print("已更新配置: latent_channels=3, lr=1.0")
+    print("ALE环境已正确注册并配置ROMs")
     
     live_viewer()
 
