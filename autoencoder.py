@@ -50,7 +50,7 @@ class StreamingAutoEncoder(nn.Module):
         self.apply(initialize_weights)
         
         # 优化器
-        self.optimizer = ObGD(self.parameters(), lr=lr, gamma=gamma, lamda=lamda, kappa=kappa)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
         
         # 监控组件
         self.perf_monitor = PerformanceMonitor()
