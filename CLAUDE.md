@@ -4,14 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-流式视频自编码器项目，实现视频帧压缩和重建的在线学习。使用自定义 ObGD（在线梯度下降）优化器，采用并行多尺度架构。**重要：必须使用 drl conda 环境和 uv 执行。**
+流式视频自编码器项目，实现视频帧压缩和重建的在线学习。使用自定义 ObGD（在线梯度下降）优化器，采用并行多尺度架构。**重要：必须使用 uv 执行。**
 
 ## 关键命令
 
 ### 环境设置和运行
 ```bash
-# 激活 DRL conda 环境
-conda activate drl
 
 # 使用 uv 安装依赖（推荐）
 uv pip install -r requirements.txt
@@ -26,11 +24,26 @@ tensorboard --logdir=runs
 
 ### 开发工作流
 ```bash
-# 激活环境并运行
-conda activate drl && uv run main.py
+# 激活环境并运行 uv run main.py
 
 # 在另一个终端启动 TensorBoard
-conda activate drl && tensorboard --logdir=runs
+tensorboard --logdir=runs
+```
+
+### ALE 环境设置
+```bash
+# ALE (Atari Learning Environment) 已正确配置
+# 包含所需的游戏 ROMs：
+# - Breakout
+# - Assault  
+# - SpaceInvaders
+# - Pacman
+# - Asteroids
+
+# 环境注册已在 main.py 中完成：
+import ale_py
+import gymnasium as gym
+gym.register_envs(ale_py)
 ```
 
 ## Architecture Overview
@@ -50,6 +63,7 @@ conda activate drl && tensorboard --logdir=runs
    - Medium (5×5): 224×224×3 → 25×25×2, balanced features
    - Large (7×7): 224×224×3 → 23×23×2, structural features
    - No-padding design preserving edge information
+   - Default latent_channels=3 (updated from 4)
 
 3. **Decoder** (`model.py:314`):
    - Symmetric three-branch decoder architecture
@@ -62,6 +76,7 @@ conda activate drl && tensorboard --logdir=runs
    - Momentum updates with adaptive learning rates
    - Memory-efficient design without full gradient history storage
    - Key parameters: `lr=1.0`, `gamma=0.99`, `lamda=0.8`, `kappa=2.0`
+   - Default learning rate is 1.0 (not 0.01 as previously used)
 
 5. **Loss Functions** (`loss.py:12`):
    - Multi-component loss: MSE + 0.5*L1 + 0.1*SSIM
@@ -101,8 +116,6 @@ conda activate drl && tensorboard --logdir=runs
 
 ### Environment Setup
 ```bash
-# Activate DRL conda environment
-conda activate drl
 
 # Install dependencies with uv
 uv pip install -r requirements.txt
@@ -129,9 +142,13 @@ tensorboard --logdir=runs
 ### Key Dependencies
 - PyTorch 2.3.0 with TensorBoard 2.16.2
 - Gymnasium 0.29.1 for environment interaction
+- MuJoCo 3.3.5 for physics simulation (upgraded from 2.3.7)
+- ALE (Atari Learning Environment) with ROMs for game environments
+- dm-control 1.0.31 for control environments
+- stable-baselines3 2.7.0 for reinforcement learning algorithms
 - OpenCV 4.9.0.80 for frame processing
 - NumPy 1.26.4 and scientific computing libraries
-- Additional ML libraries: stable-baselines3, dm-control, matplotlib
+- Additional ML libraries: matplotlib, scipy, pandas
 
 ### Training Characteristics
 - Online learning with frame-by-frame updates
@@ -158,12 +175,15 @@ tensorboard --logdir=runs
 
 ### Environment Integration
 - Tested with Gymnasium environments (ALE, dm-control)
+- ALE environments properly registered with `gym.register_envs(ale_py)`
+- Atari ROMs installed and configured for game environments
 - Frame preprocessing: resize, normalize, convert to tensor
 - Supports various game environments for testing
 
 ### Runtime Mode
 Single runtime mode: live viewer
-- Randomly selects from game environments (Breakout, Assault, SpaceInvaders, Pacman, Asteroids)
+- Randomly selects from ALE game environments (Breakout, Assault, SpaceInvaders, Pacman, Asteroids)
+- ALE environments properly registered with `gym.register_envs(ale_py)`
 - Real-time TensorBoard monitoring with per-frame updates and flush
 - Supports loading pretrained model if `quick_demo_model.pth` exists
 - Automatic TensorBoard writer flushing for real-time visualization
@@ -177,8 +197,8 @@ Single runtime mode: live viewer
 # Factory function for model creation
 model = create_streaming_ae(
     input_channels=3,
-    latent_channels=3,  # Note: Updated from 4 to 3
-    lr=0.01,            # Learning rate
+    latent_channels=3,  # Updated from 4 to 3
+    lr=1.0,             # Learning rate (default: 1.0)
     debug_vis=True,
     use_tensorboard=True,
     log_dir=f"runs/live_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
