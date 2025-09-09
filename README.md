@@ -16,30 +16,28 @@
 
 ### 🏗️ 架构设计
 
-#### 编码器架构
+#### 编码器架构（实际实现）
 ```
 输入: 224×224×3 (RGB图像)
   ↓
-Conv2d + LayerNorm + LeakyReLU: 224×224×3 → 112×112×8
+并行三分支编码器:
+  - 小卷积分支 (3×3): 224×224×3 → 27×27×3，纹理特征
+  - 中卷积分支 (5×5): 224×224×3 → 25×25×2，平衡特征  
+  - 大卷积分支 (7×7): 224×224×3 → 23×23×2，结构特征
   ↓
-Conv2d + LayerNorm + LeakyReLU: 112×112×8 → 56×56×16
-  ↓
-SelfAttention2D + Conv2d: 56×56×16 → 56×56×16 (特征增强)
-  ↓
-MultiHeadAttentionCompression: 56×56×16 → 28×28×16 (潜在空间)
+潜在空间: 三个分支的embedding，压缩比 92:1, 161:1, 190:1
 ```
 
-#### 解码器架构
+#### 解码器架构（实际实现）
 ```
-潜在空间: 28×28×16
+潜在空间: 三个分支的embedding
   ↓
-AttentionDecompression: 28×28×16 → 56×56×16
+并行三分支解码器:
+  - 小卷积分支解码器: 27×27×3 → 223×223×3
+  - 中卷积分支解码器: 25×25×2 → 221×221×3
+  - 大卷积分支解码器: 23×23×2 → 219×219×3
   ↓
-SelfAttention2D + Conv2d: 56×56×16 → 56×56×16 (特征增强)
-  ↓
-ConvTranspose2d + LayerNorm: 56×56×16 → 112×112×8
-  ↓
-ConvTranspose2d + Sigmoid: 112×112×8 → 224×224×3 (重建输出)
+自适应融合: 统一尺寸并融合为224×224×3（重建输出）
 ```
 
 ### 🧠 优化策略
@@ -52,12 +50,12 @@ ConvTranspose2d + Sigmoid: 112×112×8 → 224×224×3 (重建输出)
 
 #### 损失函数设计
 ```python
-# 全局损失 - 关注整体结构  
-global_loss = mse_loss + 0.1 * gradient_loss + 0.1 * ssim_loss
+# 全局损失 - 结合多种损失函数
+global_loss = mse_loss + l1_loss + ssim_loss
 
 # 包含多种损失函数确保重建质量
 # - MSE损失: 像素级重建误差
-# - 梯度损失: 保持边缘和纹理信息
+# - L1损失: 提供更稳定的梯度
 # - SSIM损失: 结构相似性
 ```
 
@@ -65,11 +63,13 @@ global_loss = mse_loss + 0.1 * gradient_loss + 0.1 * ssim_loss
 
 ```
 stream-ae/
-├── quick_start.py              # 快速启动脚本
+├── main.py                     # 主入口脚本 - 实时可视化查看器
 ├── streaming_video_autoencoder.py  # 核心模型实现
 ├── requirements.txt            # 依赖包列表
 ├── optim.py                   # ObGD优化器实现
 ├── sparse_init.py             # 稀疏权重初始化
+├── model.py                   # 模型组件（编码器、解码器等）
+├── loss.py                    # 损失函数实现
 └── README.md                  # 项目文档
 ```
 
@@ -86,16 +86,18 @@ pip install -r requirements.txt
 
 #### 2. 运行演示
 ```bash
-# 使用uv运行
-uv run quick_start.py
+# 直接运行主程序（启动实时可视化查看器）
+python main.py
 
-# 或直接运行
-python quick_start.py
+# 或使用uv运行
+uv run main.py
 ```
 
-#### 3. 选择运行模式
-- **模式1**: Quick Demo - 完整训练和分析流程 (TensorBoard)
-- **模式2**: Live Viewer - 实时可视化监控 (TensorBoard)
+#### 3. 运行模式
+- **实时可视化模式**: 运行 `python main.py` 直接启动实时可视化查看器
+  - 随机选择游戏环境（Breakout、Assault、SpaceInvaders、Pacman、Asteroids）
+  - 实时TensorBoard监控，每帧刷新
+  - 支持模型加载（如果存在 `quick_demo_model.pth`）
 
 #### 4. TensorBoard可视化
 ```bash
@@ -106,14 +108,6 @@ tensorboard --logdir=runs
 http://localhost:6006
 ```
 
-#### 5. 测试TensorBoard集成
-```bash
-# 运行测试脚本
-python test_tensorboard.py
-
-# 查看测试结果
-tensorboard --logdir=runs/test_tensorboard
-```
 
 ### 📊 性能监控
 
