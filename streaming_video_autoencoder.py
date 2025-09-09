@@ -16,7 +16,7 @@ import time
 
 # 导入自定义模块
 from loss import compute_global_loss
-from optim import initialize_weights
+from optim import initialize_weights, ObGD
 from model import (
     PixelChangeDetector, Encoder, Decoder
 )
@@ -71,7 +71,7 @@ class StreamingAutoEncoder(nn.Module):
             input_channels (int): 输入图像通道数，默认3（RGB）
             base_channels (int): 编码器基础通道数（保留兼容性，实际使用固定设计）
             latent_channels (int): 潜在空间维度，每个分支的输出通道数
-            lr (float): Adam优化器学习率
+            lr (float): ObGD优化器学习率
             gamma (float): 动量衰减因子，用于梯度平滑
             lamda (float): 损失函数权重平衡参数
             kappa (float): 损失稳定性参数
@@ -115,8 +115,8 @@ class StreamingAutoEncoder(nn.Module):
         # 初始化权重
         self.apply(initialize_weights)
 
-        # 使用标准Adam优化器替代ObGD，提高训练稳定性
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=(0.9, 0.999))
+        # 使用ObGD优化器，专为流式学习设计
+        self.optimizer = ObGD(self.parameters(), lr=lr, gamma=gamma, lamda=lamda, kappa=kappa)
 
         # 像素变化检测器
         self.change_detector = PixelChangeDetector()
@@ -201,7 +201,7 @@ class StreamingAutoEncoder(nn.Module):
         # 梯度裁剪 - 防止梯度爆炸
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         
-        # 使用标准Adam优化器的step方法
+        # 使用ObGD优化器的step方法
         self.optimizer.step()
         
         # 更新历史信息
@@ -544,7 +544,7 @@ def main():
         input_channels=3,
         base_channels=8,        # 基础通道数（新架构中实际使用固定设计）
         latent_channels=4,     # 潜在空间维度（每个分支的输出通道数）
-        lr=0.0001,             # Adam优化器学习率
+        lr=0.0001,             # ObGD优化器学习率
         gamma=0.99,            # 动量衰减因子
         lamda=0.8,             # 损失函数权重平衡参数
         kappa=2.0,             # 损失稳定性参数
