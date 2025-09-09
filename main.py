@@ -19,7 +19,8 @@ https://github.com/mohmdelsayed/streaming-drl
 
 import torch
 import gymnasium as gym
-from streaming_video_autoencoder import StreamingAutoEncoder, preprocess_frame
+from autoencoder import create_streaming_ae
+from utils import preprocess_frame
 import os
 from datetime import datetime
 
@@ -55,9 +56,8 @@ def live_viewer():
     print("注意：现在每帧都会实时刷新TensorBoard！")
 
     # Load model with TensorBoard enabled - using flush mechanism for real-time updates
-    model = StreamingAutoEncoder(
+    model = create_streaming_ae(
         input_channels=3, 
-        base_channels=8, 
         latent_channels=4, 
         lr=0.01, 
         debug_vis=True,
@@ -66,8 +66,8 @@ def live_viewer():
     )
     
     # Enable TensorBoard flush for real-time updates
-    if model.writer is not None:
-        model.writer.flush()
+    if model.tensorboard_logger is not None:
+        model.tensorboard_logger.writer.flush()
         print("TensorBoard flush enabled for real-time updates")
     try:
         model.load_state_dict(torch.load('quick_demo_model.pth'))
@@ -100,8 +100,8 @@ def live_viewer():
             results = model.update_params(curr_frame, debug=True)
             
             # Flush TensorBoard after each frame for real-time updates
-            if model.writer is not None:
-                model.writer.flush()
+            if model.tensorboard_logger is not None:
+                model.tensorboard_logger.writer.flush()
 
             # Environment step
             action = env.action_space.sample()
@@ -115,15 +115,15 @@ def live_viewer():
 
             # 定期输出统计信息
             if i % 100 == 0:
-                print(f"Frame {i}: Global={results['global_loss']:.3f}, MSE={results['mse_loss']:.3f}")
-                print(f"  Changed Pixels={results['changed_pixels']:.0f}")
+                print(f"Frame {i}: Loss={results['loss']:.3f}")
+                print(f"  Changed Pixels={torch.sum(results['change_mask']).item():.0f}")
                 print(f"  TensorBoard real-time flushing enabled")
 
     except KeyboardInterrupt:
         print("Stopped by user")
     finally:
         env.close()
-        model.close_tensorboard()
+        model.close()
         print("Live viewer finished")
 
 def main():
