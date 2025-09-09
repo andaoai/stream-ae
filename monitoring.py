@@ -85,6 +85,11 @@ class TensorBoardLogger:
         """增加步数"""
         self.global_step += 1
     
+    def flush(self):
+        """刷新TensorBoard缓存"""
+        if self.writer:
+            self.writer.flush()
+    
     def close(self):
         """关闭TensorBoard"""
         if self.writer:

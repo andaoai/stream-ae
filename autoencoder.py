@@ -130,6 +130,8 @@ class StreamingAutoEncoder(nn.Module):
         
         # 记录日志
         if self.tensorboard_logger:
+            # 同步步数计数器
+            self.tensorboard_logger.global_step = self.global_step
             self._log_training_step(global_loss, mse_loss, l1_loss, ssim_loss, 
                                    change_mask, reconstruction, curr_frame)
         
@@ -167,9 +169,8 @@ class StreamingAutoEncoder(nn.Module):
         logger.log_scalar('Performance/Current_FPS', self.perf_monitor.get_avg_fps())
         logger.log_scalar('Performance/Average_FPS', self.perf_monitor.get_avg_fps())
         
-        # 每20步记录图像
-        if self.global_step % 20 == 0:
-            self._log_images(reconstruction, curr_frame)
+        # 每步都记录图像，实现真正的实时更新
+        self._log_images(reconstruction, curr_frame)
     
     def _log_images(self, reconstruction, curr_frame):
         """记录图像到TensorBoard"""
@@ -191,6 +192,9 @@ class StreamingAutoEncoder(nn.Module):
         # 记录特征图（如果启用调试）
         if self.feature_visualizer.debug_vis:
             self._log_feature_maps()
+        
+        # 刷新TensorBoard以确保实时更新
+        logger.flush()
     
     def _log_feature_maps(self):
         """记录特征图到TensorBoard"""
