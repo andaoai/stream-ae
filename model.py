@@ -227,7 +227,7 @@ class PatchReconstruction(nn.Module):
 
 class Encoder(nn.Module):
     """
-    优化的并行多尺度编码器
+    简化的单一路径编码器
 
     该编码器实现了三个并行分支，每个分支使用不同大小的卷积核来捕获不同类型的特征：
     - 小卷积分支 (3×3): 专注于纹理特征
@@ -244,6 +244,12 @@ class Encoder(nn.Module):
     - 小卷积分支: 224×224×3 → 27×27×3 (压缩比 92:1)
     - 中卷积分支: 224×224×3 → 25×25×2 (压缩比 161:1)
     - 大卷积分支: 224×224×3 → 23×23×2 (压缩比 190:1)
+    - 最终输出: 224×224×3 → 128维embedding (压缩比 1176:1)
+
+    单一路径设计：
+    - 三个并行分支捕获多尺度特征
+    - 扁平化拼接为单一特征向量
+    - 通过MLP投影到128维紧凑表示
     """
 
     def __init__(self, input_channels=3, latent_channels=4):
@@ -302,41 +308,94 @@ class Encoder(nn.Module):
             LayerNormalization(),
             nn.LeakyReLU()
         )  # 输出: 23×23×2
+        
+        # MLP投影层：将多尺度特征投影到128维
+        self.embedding_mlp = nn.Sequential(
+            nn.Linear(4495, 1024),  # 27*27*3 + 25*25*2 + 23*23*2 = 2187 + 1250 + 1058 = 4495
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(1024, 512),
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(512, 256),
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(256, 128)
+        )
     
     def forward(self, x):
+        # 三个并行分支提取多尺度特征
         small_emb = self.small_kernel_branch(x)    # 27×27×3
         medium_emb = self.medium_kernel_branch(x)  # 25×25×2
         large_emb = self.large_kernel_branch(x)    # 23×23×2
         
-        return small_emb, medium_emb, large_emb
+        # 扁平化三个分支的embedding
+        small_flat = small_emb.flatten(start_dim=1)  # B x 2187
+        medium_flat = medium_emb.flatten(start_dim=1)  # B x 1250
+        large_flat = large_emb.flatten(start_dim=1)  # B x 1058
+        
+        # 拼接所有特征
+        combined_flat = torch.cat([small_flat, medium_flat, large_flat], dim=1)  # B x 4495
+        
+        # MLP投影到128维
+        embedding_128 = self.embedding_mlp(combined_flat)  # B x 128
+        
+        return embedding_128
 
 
 class Decoder(nn.Module):
     """
-    优化的并行多尺度解码器
+    简化的单一路径解码器
 
-    该解码器实现了三个并行分支，每个分支对应编码器的一个分支：
-    - 小卷积分支解码器: 从27×27×4重建到223×223×3
-    - 中卷积分支解码器: 从25×25×4重建到221×221×3  
-    - 大卷积分支解码器: 从23×23×4重建到219×219×3
+    该解码器从128维embedding重建原始图像：
+    - MLP扩展层：将128维embedding扩展到多尺度特征
+    - 三个并行解码分支：对应编码器的三个分支
+    - 特征融合：将多尺度重建结果融合为最终图像
 
     核心特性：
-    1. 对称设计：每个解码器分支与其对应的编码器分支结构对称
-    2. 无填充策略：所有转置卷积不使用padding，保持边缘真实性
-    3. 直接特征融合：将多尺度特征直接合并，不在中间层应用sigmoid
+    1. 单一输入：只接受128维embedding作为输入
+    2. 对称设计：解码分支与编码器分支结构对称
+    3. 无填充策略：所有转置卷积不使用padding，保持边缘真实性
     4. 最终sigmoid：只在最终输出层应用sigmoid激活函数
     5. 尺寸统一：使用双线性插值将不同尺寸的重建图像统一到224×224
 
-    融合策略：
-    1. 并行解码：三个分支同时解码，输出原始特征值
-    2. 尺寸统一：将三个重建图像上采样到224×224
-    3. 通道拼接：将三个图像按通道维度拼接 (224×224×9)
-    4. 特征融合：使用1×1卷积进行特征融合和降维
-    5. 最终激活：只在最终输出应用sigmoid确保输出范围[0,1]
+    重建策略：
+    1. MLP扩展：将128维embedding扩展到4495维
+    2. 特征分割：分割为三个分支的特征
+    3. 并行解码：三个分支同时解码
+    4. 尺寸统一：将三个重建图像上采样到224×224
+    5. 特征融合：使用1×1卷积进行特征融合和降维
+    6. 最终激活：应用sigmoid确保输出范围[0,1]
     """
 
     def __init__(self, latent_channels=4, output_channels=3):
         super().__init__()
+        
+        # MLP扩展层：将128维embedding扩展到多尺度特征
+        self.embedding_mlp_expand = nn.Sequential(
+            nn.Linear(128, 256),
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(256, 512),
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(512, 1024),
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(1024, 4495)  # 扩展到拼接维度
+        )
         
         # 小卷积分支解码器 (纹理特征)
         self.small_decoder = nn.Sequential(
@@ -394,11 +453,25 @@ class Decoder(nn.Module):
             nn.Conv2d(6, 3, 1),  # 最终输出，无sigmoid
         )
     
-    def forward(self, small_emb, medium_emb, large_emb):
+    def forward(self, embedding_128):
+        # 从128维embedding重建三个分支特征
+        expanded_flat = self.embedding_mlp_expand(embedding_128)  # B x 4495
+        
+        # 分割为三个分支
+        small_flat = expanded_flat[:, :2187]  # B x 2187 (27*27*3)
+        medium_flat = expanded_flat[:, 2187:2187+1250]  # B x 1250 (25*25*2)
+        large_flat = expanded_flat[:, 2187+1250:]  # B x 1058 (23*23*2)
+        
+        # Reshape到原始的spatial dimensions
+        batch_size = embedding_128.shape[0]
+        small_emb = small_flat.view(batch_size, 3, 27, 27)  # B x 3 x 27 x 27
+        medium_emb = medium_flat.view(batch_size, 2, 25, 25)  # B x 2 x 25 x 25
+        large_emb = large_flat.view(batch_size, 2, 23, 23)  # B x 2 x 23 x 23
+        
         # 并行解码
-        small_recon = self.small_decoder(small_emb)    # 223×223×3
-        medium_recon = self.medium_decoder(medium_emb) # 221×221×3
-        large_recon = self.large_decoder(large_emb)    # 219×219×3
+        small_recon = self.small_decoder(small_emb)
+        medium_recon = self.medium_decoder(medium_emb)
+        large_recon = self.large_decoder(large_emb)
         
         # 统一尺寸到224×224
         small_recon_up = F.interpolate(small_recon, size=(224, 224), mode='bilinear', align_corners=False)

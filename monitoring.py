@@ -121,15 +121,23 @@ class FeatureVisualizer:
         
         if channel_idx is not None:
             # 特定通道
-            if channel_idx < feature_map.shape[1]:
+            if len(feature_map.shape) > 1 and channel_idx < feature_map.shape[1]:
                 channel_data = feature_map[0, channel_idx].cpu().numpy()
                 return channel_data
             else:
                 return None
         else:
-            # 所有通道的平均
-            mean_feature = torch.mean(feature_map, dim=1, keepdim=True)
-            return mean_feature[0, 0].cpu().numpy()
+            # 处理不同形状的特征图
+            if len(feature_map.shape) == 4:  # [B, C, H, W]
+                if feature_map.shape[1] == 1:  # 单通道
+                    return feature_map[0, 0].cpu().numpy()
+                else:  # 多通道，取平均
+                    mean_feature = torch.mean(feature_map, dim=1, keepdim=True)
+                    return mean_feature[0, 0].cpu().numpy()
+            elif len(feature_map.shape) == 3:  # [B, H, W]
+                return feature_map[0].cpu().numpy()
+            else:  # [H, W]
+                return feature_map.cpu().numpy()
     
     def clear_feature_maps(self):
         """清空特征图"""
