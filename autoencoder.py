@@ -59,28 +59,28 @@ class StreamingAutoEncoder(nn.Module):
         
         # 状态变量
         self.prev_frame = None
-        self.prev_embedding_128 = None
+        self.prev_embedding_512 = None
         self._current_embedding = None
         self.global_step = 0
     
     def encode(self, x):
         """编码"""
-        embedding_128 = self.encoder(x)
+        embedding_512 = self.encoder(x)
         
         # 存储特征图用于可视化
         self.feature_visualizer.store_feature_map('input', x)
-        # 将128维embedding重塑为16x8的特征图用于可视化 (添加通道维度)
-        embedding_vis = embedding_128.view(-1, 1, 16, 8)[:1]  # 取第一个batch，形状为 [1, 1, 16, 8]
-        self.feature_visualizer.store_feature_map('embedding_128', embedding_vis)
+        # 将512维embedding重塑为16x32的特征图用于可视化 (添加通道维度)
+        embedding_vis = embedding_512.view(-1, 1, 16, 32)[:1]  # 取第一个batch，形状为 [1, 1, 16, 32]
+        self.feature_visualizer.store_feature_map('embedding_512', embedding_vis)
         
         # 保存当前embedding用于统计
-        self._current_embedding = embedding_128.detach()
+        self._current_embedding = embedding_512.detach()
         
-        return embedding_128
+        return embedding_512
     
-    def decode(self, embedding_128):
+    def decode(self, embedding_512):
         """解码"""
-        reconstruction = self.decoder(embedding_128)
+        reconstruction = self.decoder(embedding_512)
         
         # 存储输出特征图
         self.feature_visualizer.store_feature_map('output', reconstruction)
@@ -89,9 +89,9 @@ class StreamingAutoEncoder(nn.Module):
     
     def forward(self, x):
         """前向传播"""
-        embedding_128 = self.encode(x)
-        reconstruction = self.decode(embedding_128)
-        return reconstruction, embedding_128
+        embedding_512 = self.encode(x)
+        reconstruction = self.decode(embedding_512)
+        return reconstruction, embedding_512
     
     def update_params(self, curr_frame, debug=False):
         """
@@ -108,7 +108,7 @@ class StreamingAutoEncoder(nn.Module):
         step_time = self.perf_monitor.update_step_time()
         
         # 前向传播
-        reconstruction, embedding_128 = self(curr_frame)
+        reconstruction, embedding_512 = self(curr_frame)
         
         # 检测像素变化
         change_mask, change_intensity = self.change_detector.detect_changes(self.prev_frame, curr_frame)
@@ -128,7 +128,7 @@ class StreamingAutoEncoder(nn.Module):
         
         # 更新历史信息
         self.prev_frame = curr_frame.detach().clone()
-        self.prev_embedding_128 = embedding_128.detach().clone()
+        self.prev_embedding_512 = embedding_512.detach().clone()
         
         # 记录日志
         if self.tensorboard_logger:
@@ -146,7 +146,7 @@ class StreamingAutoEncoder(nn.Module):
             'l1_loss': l1_loss.item(),
             'ssim_loss': ssim_loss.item(),
             'reconstruction': reconstruction,
-            'embedding_128': embedding_128,
+            'embedding_512': embedding_512,
             'change_mask': change_mask,
             'change_intensity': change_intensity,
             'fps': self.perf_monitor.get_avg_fps(),
@@ -210,12 +210,12 @@ class StreamingAutoEncoder(nn.Module):
         """记录特征图到TensorBoard"""
         logger = self.tensorboard_logger
         
-        # 记录128维embedding的可视化
-        embedding_map = self.feature_visualizer.get_feature_visualization('embedding_128')
+        # 记录512维embedding的可视化
+        embedding_map = self.feature_visualizer.get_feature_visualization('embedding_512')
         if embedding_map is not None:
             # 将numpy数组转换为torch张量并添加批次维度
             feature_tensor = torch.from_numpy(embedding_map).unsqueeze(0).unsqueeze(0)
-            logger.log_images('03_Features/embedding_128', feature_tensor)
+            logger.log_images('03_Features/embedding_512', feature_tensor)
     
     def get_performance_summary(self):
         """获取性能摘要"""

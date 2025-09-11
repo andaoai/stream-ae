@@ -230,9 +230,9 @@ class Encoder(nn.Module):
     简化的单一路径编码器
 
     该编码器实现了三个并行分支，每个分支使用不同大小的卷积核来捕获不同类型的特征：
-    - 小卷积分支 (3×3): 专注于纹理特征
-    - 中卷积分支 (5×5): 专注于平衡特征  
-    - 大卷积分支 (7×7): 专注于结构特征和小目标
+    - 小卷积分支 (5×5): 专注于纹理特征
+    - 中卷积分支 (13×13): 专注于平衡特征  
+    - 大卷积分支 (21×21): 专注于结构特征和小目标
 
     核心设计原则：
     1. 零填充策略：所有卷积层不使用padding，保持边缘信息的真实性
@@ -241,40 +241,22 @@ class Encoder(nn.Module):
     4. 独立通道设计：每个分支的通道数可以根据其特点进行调整
 
     输出尺寸：
-    - 小卷积分支: 224×224×3 → 27×27×3 (压缩比 92:1)
-    - 中卷积分支: 224×224×3 → 25×25×2 (压缩比 161:1)
-    - 大卷积分支: 224×224×3 → 23×23×2 (压缩比 190:1)
-    - 最终输出: 224×224×3 → 128维embedding (压缩比 1176:1)
+    - 小卷积分支: 224×224×3 → 13×13×3 (压缩比 395:1)
+    - 中卷积分支: 224×224×3 → 18×18×4 (压缩比 233:1)
+    - 大卷积分支: 224×224×3 → 11×11×6 (压缩比 278:1)
+    - 最终输出: 224×224×3 → 512维embedding (压缩比 294:1)
 
     单一路径设计：
     - 三个并行分支捕获多尺度特征
     - 扁平化拼接为单一特征向量
-    - 通过MLP投影到128维紧凑表示
+    - 通过MLP投影到512维紧凑表示
     """
 
     def __init__(self, input_channels=3, latent_channels=4):
         super().__init__()
         
-        # 小卷积分支 - 纹理特征 (3×3, 无padding)
+        # 小卷积分支 - 纹理特征 (5×5, 无padding)
         self.small_kernel_branch = nn.Sequential(
-            # 224×224×3 → 111×111×16
-            nn.Conv2d(3, 16, 3, stride=2, padding=0),  # 无padding
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            
-            # 111×111×16 → 55×55×12
-            nn.Conv2d(16, 12, 3, stride=2, padding=0),  # 无padding
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            
-            # 55×55×12 → 27×27×3
-            nn.Conv2d(12, 3, 3, stride=2, padding=0),  # 无padding
-            LayerNormalization(),
-            nn.LeakyReLU()
-        )  # 输出: 27×27×3
-        
-        # 中卷积分支 - 平衡特征 (5×5, 无padding)
-        self.medium_kernel_branch = nn.Sequential(
             # 224×224×3 → 110×110×16
             nn.Conv2d(3, 16, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
@@ -285,88 +267,106 @@ class Encoder(nn.Module):
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 53×53×12 → 25×25×2
-            nn.Conv2d(12, 2, 5, stride=2, padding=0),  # 无padding
+            # 53×53×12 → 13×13×3
+            nn.Conv2d(12, 3, 5, stride=4, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 25×25×2
+        )  # 输出: 13×13×3
         
-        # 大卷积分支 - 结构特征 (7×7, 无padding)
+        # 中卷积分支 - 平衡特征 (13×13, 无padding)
+        self.medium_kernel_branch = nn.Sequential(
+            # 224×224×3 → 106×106×16
+            nn.Conv2d(3, 16, 13, stride=2, padding=0),  # 无padding
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            
+            # 106×106×16 → 47×47×12
+            nn.Conv2d(16, 12, 13, stride=2, padding=0),  # 无padding
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            
+            # 47×47×12 → 18×18×4
+            nn.Conv2d(12, 4, 13, stride=2, padding=0),  # 无padding
+            LayerNormalization(),
+            nn.LeakyReLU()
+        )  # 输出: 18×18×4
+        
+        # 大卷积分支 - 结构特征 (21×21, 无padding)
         self.large_kernel_branch = nn.Sequential(
-            # 224×224×3 → 109×109×16
-            nn.Conv2d(3, 16, 7, stride=2, padding=0),  # 无padding
+            # 224×224×3 → 102×102×16
+            nn.Conv2d(3, 16, 21, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 109×109×16 → 52×52×12
-            nn.Conv2d(16, 12, 7, stride=2, padding=0),  # 无padding
+            # 102×102×16 → 41×41×12
+            nn.Conv2d(16, 12, 21, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 52×52×12 → 23×23×2
-            nn.Conv2d(12, 2, 7, stride=2, padding=0),  # 无padding
+            # 41×41×12 → 11×11×6
+            nn.Conv2d(12, 6, 21, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 23×23×2
+        )  # 输出: 11×11×6
         
-        # MLP投影层：将多尺度特征投影到128维
+        # MLP投影层：将多尺度特征投影到512维
         self.embedding_mlp = nn.Sequential(
-            nn.Linear(4495, 1024),  # 27*27*3 + 25*25*2 + 23*23*2 = 2187 + 1250 + 1058 = 4495
+            nn.Linear(2529, 1024),  # 13*13*3 + 18*18*4 + 11*11*6 = 507 + 1296 + 726 = 2529
             LayerNormalization(),
             nn.LeakyReLU(),
             nn.Dropout(0.1),
             
-            nn.Linear(1024, 512),
+            nn.Linear(1024, 768),
             LayerNormalization(),
             nn.LeakyReLU(),
             nn.Dropout(0.1),
             
-            nn.Linear(512, 256),
+            nn.Linear(768, 640),
             LayerNormalization(),
             nn.LeakyReLU(),
             nn.Dropout(0.1),
             
-            nn.Linear(256, 128)
+            nn.Linear(640, 512)
         )
     
     def forward(self, x):
         # 三个并行分支提取多尺度特征
-        small_emb = self.small_kernel_branch(x)    # 27×27×3
-        medium_emb = self.medium_kernel_branch(x)  # 25×25×2
-        large_emb = self.large_kernel_branch(x)    # 23×23×2
+        small_emb = self.small_kernel_branch(x)    # 13×13×3
+        medium_emb = self.medium_kernel_branch(x)  # 18×18×4
+        large_emb = self.large_kernel_branch(x)    # 11×11×6
         
         # 扁平化三个分支的embedding
-        small_flat = small_emb.flatten(start_dim=1)  # B x 2187
-        medium_flat = medium_emb.flatten(start_dim=1)  # B x 1250
-        large_flat = large_emb.flatten(start_dim=1)  # B x 1058
+        small_flat = small_emb.flatten(start_dim=1)  # B x 507
+        medium_flat = medium_emb.flatten(start_dim=1)  # B x 1296
+        large_flat = large_emb.flatten(start_dim=1)  # B x 726
         
         # 拼接所有特征
-        combined_flat = torch.cat([small_flat, medium_flat, large_flat], dim=1)  # B x 4495
+        combined_flat = torch.cat([small_flat, medium_flat, large_flat], dim=1)  # B x 2529
         
-        # MLP投影到128维
-        embedding_128 = self.embedding_mlp(combined_flat)  # B x 128
+        # MLP投影到512维
+        embedding_512 = self.embedding_mlp(combined_flat)  # B x 512
         
-        return embedding_128
+        return embedding_512
 
 
 class Decoder(nn.Module):
     """
     简化的单一路径解码器
 
-    该解码器从128维embedding重建原始图像：
-    - MLP扩展层：将128维embedding扩展到多尺度特征
+    该解码器从512维embedding重建原始图像：
+    - MLP扩展层：将512维embedding扩展到多尺度特征
     - 三个并行解码分支：对应编码器的三个分支
     - 特征融合：将多尺度重建结果融合为最终图像
 
     核心特性：
-    1. 单一输入：只接受128维embedding作为输入
+    1. 单一输入：只接受512维embedding作为输入
     2. 对称设计：解码分支与编码器分支结构对称
     3. 无填充策略：所有转置卷积不使用padding，保持边缘真实性
     4. 最终sigmoid：只在最终输出层应用sigmoid激活函数
     5. 尺寸统一：使用双线性插值将不同尺寸的重建图像统一到224×224
 
     重建策略：
-    1. MLP扩展：将128维embedding扩展到4495维
+    1. MLP扩展：将512维embedding扩展到4495维
     2. 特征分割：分割为三个分支的特征
     3. 并行解码：三个分支同时解码
     4. 尺寸统一：将三个重建图像上采样到224×224
@@ -377,73 +377,73 @@ class Decoder(nn.Module):
     def __init__(self, latent_channels=4, output_channels=3):
         super().__init__()
         
-        # MLP扩展层：将128维embedding扩展到多尺度特征
+        # MLP扩展层：将512维embedding扩展到多尺度特征
         self.embedding_mlp_expand = nn.Sequential(
-            nn.Linear(128, 256),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(256, 512),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Dropout(0.1),
-            
             nn.Linear(512, 1024),
             LayerNormalization(),
             nn.LeakyReLU(),
             nn.Dropout(0.1),
             
-            nn.Linear(1024, 4495)  # 扩展到拼接维度
+            nn.Linear(1024, 2048),
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(2048, 3072),
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            nn.Dropout(0.1),
+            
+            nn.Linear(3072, 2529)  # 扩展到拼接维度
         )
         
         # 小卷积分支解码器 (纹理特征)
         self.small_decoder = nn.Sequential(
-            # 27×27×3 → 55×55×12
-            nn.ConvTranspose2d(3, 12, 3, stride=2, padding=0),  # 无padding
+            # 13×13×3 → 53×53×12
+            nn.ConvTranspose2d(3, 12, 5, stride=4, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 55×55×12 → 111×111×16
-            nn.ConvTranspose2d(12, 16, 3, stride=2, padding=0),  # 无padding
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            
-            # 111×111×16 → 223×223×3
-            nn.ConvTranspose2d(16, 3, 3, stride=2, padding=0)  # 无padding，无sigmoid
-        )  # 输出: 223×223×3
-        
-        # 中卷积分支解码器 (平衡特征)
-        self.medium_decoder = nn.Sequential(
-            # 25×25×2 → 53×53×12
-            nn.ConvTranspose2d(2, 12, 5, stride=2, padding=0),  # 无padding
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            
-            # 53×53×12 → 109×109×16
+            # 53×53×12 → 110×110×16
             nn.ConvTranspose2d(12, 16, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 109×109×16 → 221×221×3
+            # 110×110×16 → 220×220×3
             nn.ConvTranspose2d(16, 3, 5, stride=2, padding=0)  # 无padding，无sigmoid
-        )  # 输出: 221×221×3
+        )  # 输出: 220×220×3
+        
+        # 中卷积分支解码器 (平衡特征)
+        self.medium_decoder = nn.Sequential(
+            # 18×18×4 → 47×47×12
+            nn.ConvTranspose2d(4, 12, 13, stride=2, padding=0),  # 无padding
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            
+            # 47×47×12 → 106×106×16
+            nn.ConvTranspose2d(12, 16, 13, stride=2, padding=0),  # 无padding
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            
+            # 106×106×16 → 212×212×3
+            nn.ConvTranspose2d(16, 3, 13, stride=2, padding=0)  # 无padding，无sigmoid
+        )  # 输出: 212×212×3
         
         # 大卷积分支解码器 (结构特征)
         self.large_decoder = nn.Sequential(
-            # 23×23×2 → 51×51×12
-            nn.ConvTranspose2d(2, 12, 7, stride=2, padding=0),  # 无padding
+            # 11×11×6 → 41×41×12
+            nn.ConvTranspose2d(6, 12, 21, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 51×51×12 → 107×107×16
-            nn.ConvTranspose2d(12, 16, 7, stride=2, padding=0),  # 无padding
+            # 41×41×12 → 102×102×16
+            nn.ConvTranspose2d(12, 16, 21, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
             
-            # 107×107×16 → 219×219×3
-            nn.ConvTranspose2d(16, 3, 7, stride=2, padding=0)  # 无padding，无sigmoid
-        )  # 输出: 219×219×3
+            # 102×102×16 → 204×204×3
+            nn.ConvTranspose2d(16, 3, 21, stride=2, padding=0)  # 无padding，无sigmoid
+        )  # 输出: 204×204×3
         
         # 自适应尺寸融合模块 - 直接合并特征，最后应用sigmoid
         self.adaptive_fusion = nn.Sequential(
@@ -453,20 +453,20 @@ class Decoder(nn.Module):
             nn.Conv2d(6, 3, 1),  # 最终输出，无sigmoid
         )
     
-    def forward(self, embedding_128):
-        # 从128维embedding重建三个分支特征
-        expanded_flat = self.embedding_mlp_expand(embedding_128)  # B x 4495
+    def forward(self, embedding_512):
+        # 从512维embedding重建三个分支特征
+        expanded_flat = self.embedding_mlp_expand(embedding_512)  # B x 2529
         
         # 分割为三个分支
-        small_flat = expanded_flat[:, :2187]  # B x 2187 (27*27*3)
-        medium_flat = expanded_flat[:, 2187:2187+1250]  # B x 1250 (25*25*2)
-        large_flat = expanded_flat[:, 2187+1250:]  # B x 1058 (23*23*2)
+        small_flat = expanded_flat[:, :507]  # B x 507 (13*13*3)
+        medium_flat = expanded_flat[:, 507:507+1296]  # B x 1296 (18*18*4)
+        large_flat = expanded_flat[:, 507+1296:]  # B x 726 (11*11*6)
         
         # Reshape到原始的spatial dimensions
-        batch_size = embedding_128.shape[0]
-        small_emb = small_flat.view(batch_size, 3, 27, 27)  # B x 3 x 27 x 27
-        medium_emb = medium_flat.view(batch_size, 2, 25, 25)  # B x 2 x 25 x 25
-        large_emb = large_flat.view(batch_size, 2, 23, 23)  # B x 2 x 23 x 23
+        batch_size = embedding_512.shape[0]
+        small_emb = small_flat.view(batch_size, 3, 13, 13)  # B x 3 x 13 x 13
+        medium_emb = medium_flat.view(batch_size, 4, 18, 18)  # B x 4 x 18 x 18
+        large_emb = large_flat.view(batch_size, 6, 11, 11)  # B x 6 x 11 x 11
         
         # 并行解码
         small_recon = self.small_decoder(small_emb)

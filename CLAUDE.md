@@ -55,13 +55,13 @@ gym.register_envs(ale_py)
    - Parallel multi-scale architecture with three convolutional branches
    - Integrated monitoring and visualization system
    - No-padding design preserving edge information
-   - Compression ratios: 92:1, 161:1, 190:1
+   - Compression ratios: 395:1, 233:1, 278:1, 294:1 (final embedding)
 
 2. **Encoder** (`model.py:228`):
    - Three parallel branches with different kernel sizes
-   - Small (3×3): 224×224×3 → 27×27×3, texture features
-   - Medium (5×5): 224×224×3 → 25×25×2, balanced features
-   - Large (7×7): 224×224×3 → 23×23×2, structural features
+   - Small (5×5): 224×224×3 → 13×13×3, texture features
+   - Medium (13×13): 224×224×3 → 18×18×4, balanced features
+   - Large (21×21): 224×224×3 → 11×11×6, structural features
    - No-padding design preserving edge information
    - Default latent_channels=3 (updated from 4)
 
