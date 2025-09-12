@@ -22,7 +22,7 @@ def compute_global_loss(curr_frame, reconstruction):
         tuple: (global_loss, mse_loss, l1_loss, ssim_loss)
     """
     # 1. MSE损失 - 使用mean而不是sum，避免损失值过大
-    mse_loss = F.mse_loss(reconstruction, curr_frame, reduction='mean')
+    mse_loss = F.mse_loss(reconstruction, curr_frame, reduction='sum')
     
     # 2. L1损失 - 提供更稳定的梯度
     l1_loss = F.l1_loss(reconstruction, curr_frame, reduction='mean')
@@ -54,6 +54,6 @@ def compute_global_loss(curr_frame, reconstruction):
     ssim_loss = compute_ssim_loss(curr_frame, reconstruction)
     
     # 组合全局损失 - 平衡不同损失项
-    global_loss = mse_loss + 0.5 * l1_loss + 0.1 * ssim_loss
+    global_loss = mse_loss +  l1_loss +  ssim_loss
     
     return global_loss, mse_loss, l1_loss, ssim_loss
