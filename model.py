@@ -309,93 +309,52 @@ class Encoder(nn.Module):
             nn.LeakyReLU()
         )  # 输出: 11×11×6
         
-        # MLP投影层：将多尺度特征投影到512维
-        self.embedding_mlp = nn.Sequential(
-            nn.Linear(2529, 1024),  # 13*13*3 + 18*18*4 + 11*11*6 = 507 + 1296 + 726 = 2529
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(1024, 768),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(768, 640),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(640, 512)
-        )
+        # 移除MLP投影层，直接返回三路独立的embedding以保留小目标特征
+        # 压缩比保持不变：
+        # - 小卷积分支: 13×13×3 (压缩比 395:1)
+        # - 中卷积分支: 18×18×4 (压缩比 233:1)
+        # - 大卷积分支: 11×11×6 (压缩比 278:1)
     
     def forward(self, x):
         # 三个并行分支提取多尺度特征
         small_emb = self.small_kernel_branch(x)    # 13×13×3
         medium_emb = self.medium_kernel_branch(x)  # 18×18×4
         large_emb = self.large_kernel_branch(x)    # 11×11×6
-        
-        # 扁平化三个分支的embedding
-        small_flat = small_emb.flatten(start_dim=1)  # B x 507
-        medium_flat = medium_emb.flatten(start_dim=1)  # B x 1296
-        large_flat = large_emb.flatten(start_dim=1)  # B x 726
-        
-        # 拼接所有特征
-        combined_flat = torch.cat([small_flat, medium_flat, large_flat], dim=1)  # B x 2529
-        
-        # MLP投影到512维
-        embedding_512 = self.embedding_mlp(combined_flat)  # B x 512
-        
-        return embedding_512
+
+        # 直接返回三路独立的embedding，不进行压缩，保留小目标特征
+        return {
+            'small': small_emb,
+            'medium': medium_emb,
+            'large': large_emb
+        }
 
 
 class Decoder(nn.Module):
     """
-    简化的单一路径解码器
+    三路独立输入解码器
 
-    该解码器从512维embedding重建原始图像：
-    - MLP扩展层：将512维embedding扩展到多尺度特征
+    该解码器直接接受编码器的三路输出重建原始图像：
+    - 移除MLP扩展层，直接处理三路embedding
     - 三个并行解码分支：对应编码器的三个分支
     - 特征融合：将多尺度重建结果融合为最终图像
 
     核心特性：
-    1. 单一输入：只接受512维embedding作为输入
+    1. 三路独立输入：直接接受编码器的三路embedding
     2. 对称设计：解码分支与编码器分支结构对称
     3. 无填充策略：所有转置卷积不使用padding，保持边缘真实性
     4. 最终sigmoid：只在最终输出层应用sigmoid激活函数
     5. 尺寸统一：使用双线性插值将不同尺寸的重建图像统一到224×224
 
     重建策略：
-    1. MLP扩展：将512维embedding扩展到4495维
-    2. 特征分割：分割为三个分支的特征
-    3. 并行解码：三个分支同时解码
-    4. 尺寸统一：将三个重建图像上采样到224×224
-    5. 特征融合：使用1×1卷积进行特征融合和降维
-    6. 最终激活：应用sigmoid确保输出范围[0,1]
+    1. 直接输入：接受编码器的三路独立embedding
+    2. 并行解码：三个分支同时解码各自的embedding
+    3. 尺寸统一：将三个重建图像上采样到224×224
+    4. 特征融合：使用1×1卷积进行特征融合和降维
+    5. 最终激活：应用sigmoid确保输出范围[0,1]
     """
 
-    def __init__(self, latent_channels=4, output_channels=3):
+    def __init__(self):
         super().__init__()
-        
-        # MLP扩展层：将512维embedding扩展到多尺度特征
-        self.embedding_mlp_expand = nn.Sequential(
-            nn.Linear(512, 1024),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(1024, 2048),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(2048, 3072),
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            nn.Dropout(0.1),
-            
-            nn.Linear(3072, 2529)  # 扩展到拼接维度
-        )
         
         # 小卷积分支解码器 (纹理特征)
         self.small_decoder = nn.Sequential(
@@ -453,36 +412,34 @@ class Decoder(nn.Module):
             nn.Conv2d(6, 3, 1),  # 最终输出，无sigmoid
         )
     
-    def forward(self, embedding_512):
-        # 从512维embedding重建三个分支特征
-        expanded_flat = self.embedding_mlp_expand(embedding_512)  # B x 2529
-        
-        # 分割为三个分支
-        small_flat = expanded_flat[:, :507]  # B x 507 (13*13*3)
-        medium_flat = expanded_flat[:, 507:507+1296]  # B x 1296 (18*18*4)
-        large_flat = expanded_flat[:, 507+1296:]  # B x 726 (11*11*6)
-        
-        # Reshape到原始的spatial dimensions
-        batch_size = embedding_512.shape[0]
-        small_emb = small_flat.view(batch_size, 3, 13, 13)  # B x 3 x 13 x 13
-        medium_emb = medium_flat.view(batch_size, 4, 18, 18)  # B x 4 x 18 x 18
-        large_emb = large_flat.view(batch_size, 6, 11, 11)  # B x 6 x 11 x 11
-        
+    def forward(self, embeddings):
+        """
+        Args:
+            embeddings: 编码器的三路输出字典，包含:
+                       - 'small': 13×13×3
+                       - 'medium': 18×18×4
+                       - 'large': 11×11×6
+        """
+        # 直接获取三路embedding
+        small_emb = embeddings['small']    # B x 3 x 13 x 13
+        medium_emb = embeddings['medium']  # B x 4 x 18 x 18
+        large_emb = embeddings['large']    # B x 6 x 11 x 11
+
         # 并行解码
         small_recon = self.small_decoder(small_emb)
         medium_recon = self.medium_decoder(medium_emb)
         large_recon = self.large_decoder(large_emb)
-        
+
         # 统一尺寸到224×224
         small_recon_up = F.interpolate(small_recon, size=(224, 224), mode='bilinear', align_corners=False)
         medium_recon_up = F.interpolate(medium_recon, size=(224, 224), mode='bilinear', align_corners=False)
         large_recon_up = F.interpolate(large_recon, size=(224, 224), mode='bilinear', align_corners=False)
-        
+
         # 通道拼接 (224×224×9)
         combined = torch.cat([small_recon_up, medium_recon_up, large_recon_up], dim=1)
         final_output = self.adaptive_fusion(combined)
-        
+
         # 只在最终输出应用sigmoid
         final_output = torch.sigmoid(final_output)
-        
+
         return final_output
