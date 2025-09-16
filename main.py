@@ -21,8 +21,11 @@ import torch
 import gymnasium as gym
 from autoencoder import create_streaming_ae
 from utils import preprocess_frame
+from config import DEVICE, MODEL_CONFIG, TRAINING_CONFIG, ENV_CONFIG, MONITORING_CONFIG
 import os
 from datetime import datetime
+
+print(f"Main script using device: {DEVICE}")
 
 
 
@@ -57,12 +60,12 @@ def live_viewer():
 
     # Load model with TensorBoard enabled - using flush mechanism for real-time updates
     model = create_streaming_ae(
-        input_channels=3, 
-        latent_channels=3, 
-        lr=1.0, 
-        debug_vis=True,
-        use_tensorboard=True,
-        log_dir=f"runs/live_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        input_channels=MODEL_CONFIG['input_channels'],
+        latent_channels=MODEL_CONFIG['latent_channels'],
+        lr=MODEL_CONFIG['lr'],
+        debug_vis=TRAINING_CONFIG['debug_vis'],
+        use_tensorboard=TRAINING_CONFIG['use_tensorboard'],
+        log_dir=f"{MONITORING_CONFIG['tensorboard_log_dir']}/live_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
     
     # Enable TensorBoard flush for real-time updates
@@ -70,7 +73,8 @@ def live_viewer():
         model.tensorboard_logger.writer.flush()
         print("TensorBoard flush enabled for real-time updates")
     try:
-        model.load_state_dict(torch.load('quick_demo_model.pth'))
+        # 加载模型状态字典并移动到GPU
+        model.load_state_dict(torch.load(MONITORING_CONFIG['save_model_path'], map_location=DEVICE))
         print("Model loaded")
     except:
         print("Using untrained model")
@@ -80,16 +84,10 @@ def live_viewer():
     import ale_py
     import gymnasium as gym
     gym.register_envs(ale_py)
-    games = [
-        'ALE/Breakout-v5',
-        'ALE/Assault-v5', 
-        'ALE/SpaceInvaders-v5',
-        'ALE/Pacman-v5',
-        'ALE/Asteroids-v5'
-    ]
+    games = ENV_CONFIG['available_games']
     selected_game = random.choice(games)
     print(f"Selected game: {selected_game}")
-    env = gym.make(selected_game, render_mode='rgb_array')
+    env = gym.make(selected_game, render_mode=ENV_CONFIG['render_mode'])
     obs, _ = env.reset()
 
     try:

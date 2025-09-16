@@ -6,32 +6,41 @@
 import cv2
 import numpy as np
 import torch
+from config import DEVICE, DATA_CONFIG
 
 
-def preprocess_frame(frame, target_size=(224, 224)):
+def preprocess_frame(frame, target_size=None):
     """
     预处理游戏帧
-    
+
     Args:
         frame: 原始帧数据
         target_size: 目标尺寸 (width, height)
-    
+
     Returns:
         torch.Tensor: 预处理后的张量 [1, 3, H, W]
     """
+    # 使用配置中的目标尺寸
+    if target_size is None:
+        target_size = DATA_CONFIG['frame_size']
+
     # 转换为RGB格式
     if len(frame.shape) == 3:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    
+
     # 调整尺寸
     frame = cv2.resize(frame, target_size)
-    
+
     # 归一化到[0, 1]
+    min_val, max_val = DATA_CONFIG['normalization_range']
     frame = frame.astype(np.float32) / 255.0
-    
+
     # 转换为张量并添加批次维度
     tensor = torch.from_numpy(frame).permute(2, 0, 1).unsqueeze(0)
-    
+
+    # 移动到GPU
+    tensor = tensor.to(DEVICE)
+
     return tensor
 
 
