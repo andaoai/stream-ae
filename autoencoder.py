@@ -10,6 +10,7 @@ from loss import compute_global_loss
 from optim import initialize_weights, ObGD
 from model import PixelChangeDetector, Encoder, Decoder
 from monitoring import TensorBoardLogger, PerformanceMonitor, FeatureVisualizer
+from config import DEVICE, MODEL_CONFIG, TRAINING_CONFIG
 
 
 class StreamingAutoEncoder(nn.Module):
@@ -22,12 +23,12 @@ class StreamingAutoEncoder(nn.Module):
     3. 管理模型组件
     """
 
-    def __init__(self, input_channels=3, latent_channels=3, 
+    def __init__(self, input_channels=3, latent_channels=3,
                  lr=1.0, gamma=0.99, lamda=0.8, kappa=2.0,
                  debug_vis=False, use_tensorboard=True, log_dir=None):
         """
         初始化流式自编码器
-        
+
         Args:
             input_channels: 输入通道数
             latent_channels: 潜在空间维度
@@ -40,23 +41,26 @@ class StreamingAutoEncoder(nn.Module):
             log_dir: 日志目录
         """
         super(StreamingAutoEncoder, self).__init__()
-        
+
         # 模型架构
         self.encoder = Encoder(input_channels, latent_channels)
         self.decoder = Decoder()
         self.change_detector = PixelChangeDetector()
-        
+
         # 初始化权重
         self.apply(initialize_weights)
-        
+
+        # 移动模型到GPU
+        self.to(DEVICE)
+
         # 优化器
         self.optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
-        
+
         # 监控组件
         self.perf_monitor = PerformanceMonitor()
         self.tensorboard_logger = TensorBoardLogger(log_dir) if use_tensorboard else None
         self.feature_visualizer = FeatureVisualizer(debug_vis)
-        
+
         # 状态变量
         self.prev_frame = None
         self.prev_embeddings = None
@@ -103,49 +107,54 @@ class StreamingAutoEncoder(nn.Module):
     def update_params(self, curr_frame, debug=False):
         """
         执行一步训练更新
-        
+
         Args:
             curr_frame: 当前帧
             debug: 是否输出调试信息
-            
+
         Returns:
             dict: 包含损失、重建结果等信息的字典
         """
         # 更新性能监控
         step_time = self.perf_monitor.update_step_time()
-        
+
+        # 移动输入数据到GPU
+        curr_frame = curr_frame.to(DEVICE)
+        if self.prev_frame is not None:
+            self.prev_frame = self.prev_frame.to(DEVICE)
+
         # 前向传播
         reconstruction, embeddings = self(curr_frame)
-        
+
         # 检测像素变化
         change_mask, change_intensity = self.change_detector.detect_changes(self.prev_frame, curr_frame)
-        
+
         # 计算损失
         global_loss, mse_loss, l1_loss, ssim_loss = compute_global_loss(curr_frame, reconstruction)
-        
+
         # 反向传播和参数更新
         self.optimizer.zero_grad()
         global_loss.backward()
-        
+
         # 梯度裁剪
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-        
+
         # 参数更新
         self.optimizer.step()
-        
-        # 更新历史信息
+
+        # 更新历史信息（保持在GPU上）
         self.prev_frame = curr_frame.detach().clone()
         self.prev_embeddings = {k: v.detach().clone() for k, v in embeddings.items()}
-        
+
         # 记录日志
         if self.tensorboard_logger:
             # 同步步数计数器
             self.tensorboard_logger.global_step = self.global_step
-            self._log_training_step(global_loss, mse_loss, l1_loss, ssim_loss, 
+            self._log_training_step(global_loss, mse_loss, l1_loss, ssim_loss,
                                    change_mask, reconstruction, curr_frame)
-        
+
         self.global_step += 1
-        
+
         # 返回训练结果
         return {
             'loss': global_loss.item(),
@@ -192,24 +201,24 @@ class StreamingAutoEncoder(nn.Module):
     def _log_images(self, reconstruction, curr_frame):
         """记录图像到TensorBoard"""
         logger = self.tensorboard_logger
-        
-        # 确保图像在[0,1]范围内
-        input_img = torch.clamp(curr_frame[0], 0, 1)
-        recon_img = torch.clamp(reconstruction[0], 0, 1)
-        
+
+        # 确保图像在[0,1]范围内并移动到CPU
+        input_img = torch.clamp(curr_frame[0], 0, 1).cpu()
+        recon_img = torch.clamp(reconstruction[0], 0, 1).cpu()
+
         # 记录基础图像
         logger.log_images('00_Input', input_img.unsqueeze(0))
         logger.log_images('01_Reconstruction', recon_img.unsqueeze(0))
-        
+
         # 记录重建误差
         error_map = torch.abs(curr_frame - reconstruction)
-        error_img = torch.clamp(error_map[0], 0, 1)
+        error_img = torch.clamp(error_map[0], 0, 1).cpu()
         logger.log_images('02_Reconstruction_Error', error_img.unsqueeze(0))
-        
+
         # 记录特征图（如果启用调试）
         if self.feature_visualizer.debug_vis:
             self._log_feature_maps()
-        
+
         # 刷新TensorBoard以确保实时更新
         logger.flush()
     
