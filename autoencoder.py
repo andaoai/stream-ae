@@ -11,6 +11,7 @@ from optim import initialize_weights, ObGD
 from model import PixelChangeDetector, Encoder, Decoder
 from monitoring import TensorBoardLogger, PerformanceMonitor, FeatureVisualizer
 from config import DEVICE, MODEL_CONFIG, TRAINING_CONFIG
+from loss_priority_queue import LossPriorityQueue, BatchLossTracker
 
 
 class StreamingAutoEncoder(nn.Module):
@@ -25,7 +26,8 @@ class StreamingAutoEncoder(nn.Module):
 
     def __init__(self, input_channels=3, latent_channels=3,
                  lr=1.0, gamma=0.99, lamda=0.8, kappa=2.0,
-                 debug_vis=False, use_tensorboard=True, log_dir=None):
+                 debug_vis=False, use_tensorboard=True, log_dir=None,
+                 batch_size=4, queue_size=24, min_loss_threshold=0.001):
         """
         初始化流式自编码器
 
@@ -39,6 +41,9 @@ class StreamingAutoEncoder(nn.Module):
             debug_vis: 是否启用调试可视化
             use_tensorboard: 是否启用TensorBoard
             log_dir: 日志目录
+            batch_size: 批量大小（包含当前帧）
+            queue_size: 损失优先级队列大小
+            min_loss_threshold: 最低损失阈值
         """
         super(StreamingAutoEncoder, self).__init__()
 
@@ -66,6 +71,13 @@ class StreamingAutoEncoder(nn.Module):
         self.prev_embeddings = None
         self._current_embeddings = None
         self.global_step = 0
+
+        # 批量训练相关
+        self.batch_size = batch_size
+        self.loss_queue = LossPriorityQueue(max_size=queue_size, min_loss_threshold=min_loss_threshold)
+        self.batch_loss_tracker = BatchLossTracker()
+        self.current_frame_loss = 0.0
+        self.use_batch_training = batch_size > 1
     
     def encode(self, x):
         """编码"""
@@ -115,6 +127,22 @@ class StreamingAutoEncoder(nn.Module):
         Returns:
             dict: 包含损失、重建结果等信息的字典
         """
+        if self.use_batch_training:
+            return self.update_params_batch(curr_frame, debug)
+        else:
+            return self.update_params_single(curr_frame, debug)
+
+    def update_params_single(self, curr_frame, debug=False):
+        """
+        执行单帧训练更新（保持原有的单帧训练逻辑）
+
+        Args:
+            curr_frame: 当前帧
+            debug: 是否输出调试信息
+
+        Returns:
+            dict: 包含损失、重建结果等信息的字典
+        """
         # 更新性能监控
         step_time = self.perf_monitor.update_step_time()
 
@@ -127,7 +155,9 @@ class StreamingAutoEncoder(nn.Module):
         reconstruction, embeddings = self(curr_frame)
 
         # 检测像素变化
-        change_mask, change_intensity = self.change_detector.detect_changes(self.prev_frame, curr_frame)
+        change_mask, change_intensity = None, None
+        if self.prev_frame is not None:
+            change_mask, change_intensity = self.change_detector.detect_changes(self.prev_frame, curr_frame)
 
         # 计算损失
         global_loss, mse_loss, l1_loss, ssim_loss = compute_global_loss(curr_frame, reconstruction)
@@ -166,8 +196,219 @@ class StreamingAutoEncoder(nn.Module):
             'change_mask': change_mask,
             'change_intensity': change_intensity,
             'fps': self.perf_monitor.get_avg_fps(),
-            'step_time': step_time
+            'step_time': step_time,
+            'batch_size': 1,
+            'batch_training': False
         }
+
+    def update_params_batch(self, curr_frame, debug=False):
+        """
+        执行批量训练更新
+
+        Args:
+            curr_frame: 当前帧
+            debug: 是否输出调试信息
+
+        Returns:
+            dict: 包含损失、重建结果等信息的字典
+        """
+        # 更新性能监控
+        step_time = self.perf_monitor.update_step_time()
+
+        # 移动输入数据到GPU
+        curr_frame = curr_frame.to(DEVICE)
+
+        # 确保当前帧是4D张量 [batch, channels, height, width]
+        if curr_frame.dim() == 3:
+            curr_frame = curr_frame.unsqueeze(0)  # [1, 3, 224, 224]
+
+        # 首先计算当前帧的损失
+        with torch.no_grad():
+            curr_reconstruction, curr_embeddings = self(curr_frame)
+            curr_global_loss, curr_mse_loss, curr_l1_loss, curr_ssim_loss = compute_global_loss(curr_frame, curr_reconstruction)
+            self.current_frame_loss = curr_global_loss.item()
+
+        # 尝试将当前帧加入损失队列
+        frame_added = self.loss_queue.add_frame(curr_frame, self.current_frame_loss)
+
+        # 获取批量数据
+        batch_tensor, frame_ids = self.loss_queue.get_batch(self.batch_size, curr_frame)
+
+        # 确保批量张量是正确的维度
+        if batch_tensor.dim() == 5:  # 如果是5D张量 [2, batch, channels, height, width]
+            batch_tensor = batch_tensor.reshape(-1, *batch_tensor.shape[2:])  # 重新塑形为 [total_batch, channels, height, width]
+
+        # 执行批量训练
+        batch_results = self._train_batch(batch_tensor, frame_ids)
+
+        # 更新队列中帧的损失
+        self._update_queue_losses(batch_results)
+
+        # 记录日志
+        if self.tensorboard_logger:
+            self.tensorboard_logger.global_step = self.global_step
+            self._log_batch_training_step(batch_results, curr_frame)
+
+        self.global_step += 1
+
+        # 返回训练结果
+        return {
+            'loss': batch_results['total_loss'],
+            'mse_loss': batch_results['total_mse_loss'],
+            'l1_loss': batch_results['total_l1_loss'],
+            'ssim_loss': batch_results['total_ssim_loss'],
+            'reconstruction': batch_results['reconstructions'][0],  # 返回当前帧的重建结果
+            'embeddings': {k: v[0:1] for k, v in batch_results['embeddings'].items()},  # 返回当前帧的embedding
+            'change_mask': batch_results.get('change_mask'),
+            'change_intensity': batch_results.get('change_intensity'),
+            'fps': self.perf_monitor.get_avg_fps(),
+            'step_time': step_time,
+            'batch_size': len(batch_results['losses']),
+            'batch_training': True,
+            'queue_stats': self.loss_queue.get_stats(),
+            'batch_losses': batch_results['losses']
+        }
+
+    def _train_batch(self, batch_tensor, frame_ids):
+        """
+        执行批量训练
+
+        Args:
+            batch_tensor: 批量数据张量
+            frame_ids: 帧ID列表
+
+        Returns:
+            dict: 批量训练结果
+        """
+        batch_size = batch_tensor.shape[0]
+
+        # 前向传播
+        reconstructions, embeddings = self(batch_tensor)
+
+        # 计算每帧的损失
+        batch_losses = []
+        batch_mse_losses = []
+        batch_l1_losses = []
+        batch_ssim_losses = []
+
+        total_loss = 0.0
+        total_mse_loss = 0.0
+        total_l1_loss = 0.0
+        total_ssim_loss = 0.0
+
+        # 首先计算所有帧的损失
+        frame_losses = []
+        for i in range(batch_size):
+            frame_recon = reconstructions[i:i+1]
+            frame_input = batch_tensor[i:i+1]
+
+            global_loss, mse_loss, l1_loss, ssim_loss = compute_global_loss(frame_input, frame_recon)
+
+            frame_losses.append(global_loss)
+            batch_losses.append(global_loss.item())
+            batch_mse_losses.append(mse_loss.item())
+            batch_l1_losses.append(l1_loss.item())
+            batch_ssim_losses.append(ssim_loss.item())
+
+            total_mse_loss += mse_loss
+            total_l1_loss += l1_loss
+            total_ssim_loss += ssim_loss
+
+        # 计算总损失（确保精确匹配）
+        total_loss = torch.stack(frame_losses).sum()
+
+        # 反向传播和参数更新（使用总损失）
+        self.optimizer.zero_grad()
+        total_loss.backward()
+
+        # 梯度裁剪
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
+        # 参数更新
+        self.optimizer.step()
+
+        # 检测像素变化（使用第一帧）
+        change_mask = None
+        change_intensity = None
+        if self.prev_frame is not None:
+            change_mask, change_intensity = self.change_detector.detect_changes(self.prev_frame, batch_tensor[0:1])
+
+        # 更新历史信息
+        self.prev_frame = batch_tensor[0:1].detach().clone()
+        self.prev_embeddings = {k: v[0:1].detach().clone() for k, v in embeddings.items()}
+
+        return {
+            'total_loss': total_loss.item(),
+            'total_mse_loss': total_mse_loss.item(),
+            'total_l1_loss': total_l1_loss.item(),
+            'total_ssim_loss': total_ssim_loss.item(),
+            'losses': batch_losses,
+            'mse_losses': batch_mse_losses,
+            'l1_losses': batch_l1_losses,
+            'ssim_losses': batch_ssim_losses,
+            'reconstructions': reconstructions,
+            'embeddings': embeddings,
+            'frame_ids': frame_ids,
+            'change_mask': change_mask,
+            'change_intensity': change_intensity
+        }
+
+    def _update_queue_losses(self, batch_results):
+        """
+        更新队列中帧的损失
+
+        Args:
+            batch_results: 批量训练结果
+        """
+        frame_ids = batch_results['frame_ids']
+        losses = batch_results['losses']
+
+        # 跳过当前帧（第一个）
+        for i in range(1, len(frame_ids)):
+            frame_id = frame_ids[i]
+            new_loss = losses[i]
+
+            # 更新优先级队列中的损失
+            self.loss_queue.update_frame_loss(frame_id, new_loss)
+
+    def _log_batch_training_step(self, batch_results, curr_frame):
+        """
+        记录批量训练步骤的TensorBoard日志
+
+        Args:
+            batch_results: 批量训练结果
+            curr_frame: 当前帧
+        """
+        logger = self.tensorboard_logger
+
+        # 记录总损失
+        logger.log_scalar('Loss/Batch_Total_Loss', batch_results['total_loss'])
+        logger.log_scalar('Loss/Batch_Total_MSE_Loss', batch_results['total_mse_loss'])
+        logger.log_scalar('Loss/Batch_Total_L1_Loss', batch_results['total_l1_loss'])
+        logger.log_scalar('Loss/Batch_Total_SSIM_Loss', batch_results['total_ssim_loss'])
+
+        # 记录队列统计信息
+        queue_stats = self.loss_queue.get_stats()
+        logger.log_scalar('Queue/Size', queue_stats['queue_size'])
+        logger.log_scalar('Queue/Min_Loss', queue_stats['min_loss'])
+        logger.log_scalar('Queue/Max_Loss', queue_stats['max_loss'])
+        logger.log_scalar('Queue/Avg_Loss', queue_stats['avg_loss'])
+
+        # 记录当前帧损失
+        logger.log_scalar('Current_Frame/Loss', self.current_frame_loss)
+
+        # 记录批量损失分布
+        for i, loss in enumerate(batch_results['losses']):
+            logger.log_scalar(f'Batch_Losses/Frame_{i}', loss)
+
+        # 记录性能指标
+        logger.log_scalar('Performance/Current_FPS', self.perf_monitor.get_avg_fps())
+
+        # 记录图像（当前帧）
+        self._log_images(batch_results['reconstructions'][0:1], curr_frame)
+
+        # 刷新TensorBoard
+        logger.flush()
     
     def _log_training_step(self, global_loss, mse_loss, l1_loss, ssim_loss, 
                           change_mask, reconstruction, curr_frame):
@@ -249,9 +490,10 @@ class StreamingAutoEncoder(nn.Module):
 
 
 # 为了保持向后兼容，保留一些有用的方法
-def create_streaming_ae(input_channels=3, latent_channels=3, lr=1.0, 
-                       gamma=0.99, lamda=0.8, kappa=2.0, 
-                       debug_vis=False, use_tensorboard=True, log_dir=None):
+def create_streaming_ae(input_channels=3, latent_channels=3, lr=1.0,
+                       gamma=0.99, lamda=0.8, kappa=2.0,
+                       debug_vis=False, use_tensorboard=True, log_dir=None,
+                       batch_size=4, queue_size=24, min_loss_threshold=0.001):
     """创建流式自编码器的工厂函数"""
     return StreamingAutoEncoder(
         input_channels=input_channels,
@@ -262,5 +504,8 @@ def create_streaming_ae(input_channels=3, latent_channels=3, lr=1.0,
         kappa=kappa,
         debug_vis=debug_vis,
         use_tensorboard=use_tensorboard,
-        log_dir=log_dir
+        log_dir=log_dir,
+        batch_size=batch_size,
+        queue_size=queue_size,
+        min_loss_threshold=min_loss_threshold
     )
