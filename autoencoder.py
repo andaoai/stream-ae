@@ -11,7 +11,7 @@ from optim import initialize_weights, ObGD
 from model import PixelChangeDetector, Encoder, Decoder
 from monitoring import TensorBoardLogger, PerformanceMonitor, FeatureVisualizer
 from config import DEVICE, MODEL_CONFIG, TRAINING_CONFIG
-from loss_priority_queue import LossPriorityQueue, BatchLossTracker
+from loss import LossPriorityQueue, BatchLossTracker
 
 
 class StreamingAutoEncoder(nn.Module):
