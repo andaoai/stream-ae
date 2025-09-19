@@ -24,10 +24,18 @@ MODEL_CONFIG = {
 
 # 训练配置
 TRAINING_CONFIG = {
-    'batch_size': 1,  # 流式训练，每帧一个批次
+    'batch_size': 4,  # 批量训练大小：当前帧 + 队列中3个高损失帧
     'gradient_clip_norm': 1.0,
     'debug_vis': True,
     'use_tensorboard': True,
+}
+
+# 批量训练配置
+BATCH_CONFIG = {
+    'batch_size': 4,  # 批量大小
+    'queue_size': 24,  # 损失优先级队列大小
+    'min_loss_threshold': 0.001,  # 最低损失阈值
+    'enable_batch_training': True,  # 启用批量训练
 }
 
 # 数据配置

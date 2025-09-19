@@ -21,7 +21,7 @@ import torch
 import gymnasium as gym
 from autoencoder import create_streaming_ae
 from utils import preprocess_frame
-from config import DEVICE, MODEL_CONFIG, TRAINING_CONFIG, ENV_CONFIG, MONITORING_CONFIG
+from config import DEVICE, MODEL_CONFIG, TRAINING_CONFIG, ENV_CONFIG, MONITORING_CONFIG, BATCH_CONFIG
 import os
 from datetime import datetime
 
@@ -58,14 +58,24 @@ def live_viewer():
     print("启动TensorBoard: tensorboard --logdir=runs")
     print("注意：现在每帧都会实时刷新TensorBoard！")
 
-    # Load model with TensorBoard enabled - using flush mechanism for real-time updates
+    # Load model with TensorBoard enabled and batch training support
+    batch_enabled = BATCH_CONFIG['enable_batch_training']
+    batch_size = BATCH_CONFIG['batch_size'] if batch_enabled else 1
+
+    print(f"Batch training: {'ENABLED' if batch_enabled else 'DISABLED'}")
+    print(f"Batch size: {batch_size}")
+    print(f"Queue size: {BATCH_CONFIG['queue_size']}")
+
     model = create_streaming_ae(
         input_channels=MODEL_CONFIG['input_channels'],
         latent_channels=MODEL_CONFIG['latent_channels'],
         lr=MODEL_CONFIG['lr'],
         debug_vis=TRAINING_CONFIG['debug_vis'],
         use_tensorboard=TRAINING_CONFIG['use_tensorboard'],
-        log_dir=f"{MONITORING_CONFIG['tensorboard_log_dir']}/live_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        log_dir=f"{MONITORING_CONFIG['tensorboard_log_dir']}/live_viewer_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        batch_size=batch_size,
+        queue_size=BATCH_CONFIG['queue_size'],
+        min_loss_threshold=BATCH_CONFIG['min_loss_threshold']
     )
     
     # Enable TensorBoard flush for real-time updates
@@ -117,7 +127,22 @@ def live_viewer():
             # 定期输出统计信息
             if i % 100 == 0:
                 print(f"Frame {i}: Loss={results['loss']:.3f}")
-                print(f"  Changed Pixels={torch.sum(results['change_mask']).item():.0f}")
+                print(f"  Batch Training: {'YES' if results.get('batch_training', False) else 'NO'}")
+                print(f"  Batch Size: {results.get('batch_size', 1)}")
+
+                if results.get('batch_training', False):
+                    queue_stats = results.get('queue_stats', {})
+                    print(f"  Queue Size: {queue_stats.get('queue_size', 0)}")
+                    print(f"  Queue Loss Range: {queue_stats.get('min_loss', 0):.4f} - {queue_stats.get('max_loss', 0):.4f}")
+                    batch_losses = results.get('batch_losses', [])
+                    if batch_losses:
+                        print(f"  Batch Losses: {[f'{loss:.4f}' for loss in batch_losses]}")
+
+                change_mask = results.get('change_mask')
+                if change_mask is not None:
+                    print(f"  Changed Pixels={torch.sum(change_mask).item():.0f}")
+                else:
+                    print(f"  Changed Pixels=N/A")
                 print(f"  TensorBoard real-time flushing enabled")
 
     except KeyboardInterrupt:
