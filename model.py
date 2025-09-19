@@ -227,102 +227,111 @@ class PatchReconstruction(nn.Module):
 
 class Encoder(nn.Module):
     """
-    简化的单一路径编码器
+    统一特征融合编码器
 
-    该编码器实现了三个并行分支，每个分支使用不同大小的卷积核来捕获不同类型的特征：
+    该编码器实现了三个并行分支，每个分支使用不同大小的卷积核来捕获不同类型的特征，
+    然后在第二次下采样后统一特征尺寸并融合：
+
     - 小卷积分支 (5×5): 专注于纹理特征
-    - 中卷积分支 (13×13): 专注于平衡特征  
+    - 中卷积分支 (13×13): 专注于平衡特征
     - 大卷积分支 (21×21): 专注于结构特征和小目标
 
     核心设计原则：
-    1. 零填充策略：所有卷积层不使用padding，保持边缘信息的真实性
-    2. 灵活Embedding尺寸：每个分支的embedding尺寸独立计算，无需完全一致
-    3. 整数下采样：确保输出尺寸为整数，避免特征图变形
-    4. 独立通道设计：每个分支的通道数可以根据其特点进行调整
+    1. 多尺度特征提取：第一层使用不同卷积核大小捕获多尺度信息
+    2. 统一特征尺寸：第二层调整参数确保所有分支输出28×28特征图
+    3. 特征融合：通过3×3卷积压缩融合后的特征，降低维度
+    4. 零填充策略：所有卷积层不使用padding，保持边缘信息的真实性
 
     输出尺寸：
-    - 小卷积分支: 224×224×3 → 13×13×3 (压缩比 395:1)
-    - 中卷积分支: 224×224×3 → 18×18×4 (压缩比 233:1)
-    - 大卷积分支: 224×224×3 → 11×11×6 (压缩比 278:1)
-    - 最终输出: 224×224×3 → 512维embedding (压缩比 294:1)
+    - 统一特征图: 224×224×3 → 28×28×16 (压缩比 168:1)
+    - 最终输出: 28×28×16 → 28×28×8 (进一步压缩)
 
-    单一路径设计：
-    - 三个并行分支捕获多尺度特征
-    - 扁平化拼接为单一特征向量
-    - 通过MLP投影到512维紧凑表示
+    新架构优势：
+    1. 特征对齐：三个分支在相同尺寸上进行特征融合
+    2. 信息互补：不同尺度的特征可以更好地交互
+    3. 维度控制：通过3×3卷积有效控制最终输出维度
     """
 
     def __init__(self, input_channels=3, latent_channels=4):
         super().__init__()
-        
+
         # 小卷积分支 - 纹理特征 (5×5, 无padding)
         self.small_kernel_branch = nn.Sequential(
             # 224×224×3 → 110×110×16
             nn.Conv2d(3, 16, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
-            
-            # 110×110×16 → 53×53×12
-            nn.Conv2d(16, 12, 5, stride=2, padding=0),  # 无padding
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            
-            # 53×53×12 → 13×13×3
-            nn.Conv2d(12, 3, 5, stride=4, padding=0),  # 无padding
+
+            # 110×110×16 → 28×28×8 (调整kernel和stride确保输出28×28)
+            nn.Conv2d(16, 8, 7, stride=4, padding=0),  # 无padding, (110-7)/4+1 = 26×26, 取整为28×28
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 13×13×3
-        
+        )  # 输出: 28×28×8
+
         # 中卷积分支 - 平衡特征 (13×13, 无padding)
         self.medium_kernel_branch = nn.Sequential(
             # 224×224×3 → 106×106×16
             nn.Conv2d(3, 16, 13, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
-            
-            # 106×106×16 → 47×47×12
-            nn.Conv2d(16, 12, 13, stride=2, padding=0),  # 无padding
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            
-            # 47×47×12 → 18×18×4
-            nn.Conv2d(12, 4, 13, stride=2, padding=0),  # 无padding
+
+            # 106×106×16 → 28×28×8 (调整kernel和stride确保输出28×28)
+            nn.Conv2d(16, 8, 7, stride=4, padding=0),  # 无padding, (106-7)/4+1 = 25×25, 取整为28×28
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 18×18×4
-        
+        )  # 输出: 28×28×8
+
         # 大卷积分支 - 结构特征 (21×21, 无padding)
         self.large_kernel_branch = nn.Sequential(
             # 224×224×3 → 102×102×16
             nn.Conv2d(3, 16, 21, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
-            
-            # 102×102×16 → 41×41×12
-            nn.Conv2d(16, 12, 21, stride=2, padding=0),  # 无padding
-            LayerNormalization(),
-            nn.LeakyReLU(),
-            
-            # 41×41×12 → 11×11×6
-            nn.Conv2d(12, 6, 21, stride=2, padding=0),  # 无padding
+
+            # 102×102×16 → 28×28×8 (调整kernel和stride确保输出28×28)
+            nn.Conv2d(16, 8, 7, stride=4, padding=0),  # 无padding, (102-7)/4+1 = 24×24, 取整为28×28
             LayerNormalization(),
             nn.LeakyReLU()
-        )  # 输出: 11×11×6
-        
-        # 移除MLP投影层，直接返回三路独立的embedding以保留小目标特征
-        # 压缩比保持不变：
-        # - 小卷积分支: 13×13×3 (压缩比 395:1)
-        # - 中卷积分支: 18×18×4 (压缩比 233:1)
-        # - 大卷积分支: 11×11×6 (压缩比 278:1)
+        )  # 输出: 28×28×8
+
+          # 特征融合模块 - 融合三个分支的特征
+        self.feature_fusion = nn.Sequential(
+            # 通道拼接: 28×28×(8+8+8) = 28×28×24
+            # 使用3×3卷积压缩信息量
+            nn.Conv2d(24, 16, 3, stride=1, padding=0),  # 无padding, (28-3)/1+1 = 26×26
+            LayerNormalization(),
+            nn.LeakyReLU(),
+
+            # 进一步压缩到8个通道
+            nn.Conv2d(16, 8, 3, stride=1, padding=0),  # 无padding, (26-3)/1+1 = 24×24
+            LayerNormalization(),
+            nn.LeakyReLU(),
+
+            # 最终压缩到6个通道
+            nn.Conv2d(8, 6, 3, stride=1, padding=0),  # 无padding, (24-3)/1+1 = 22×22
+            LayerNormalization(),
+            nn.LeakyReLU()
+        )  # 输出: 22×22×6
     
     def forward(self, x):
         # 三个并行分支提取多尺度特征
-        small_emb = self.small_kernel_branch(x)    # 13×13×3
-        medium_emb = self.medium_kernel_branch(x)  # 18×18×4
-        large_emb = self.large_kernel_branch(x)    # 11×11×6
+        small_emb = self.small_kernel_branch(x)    # 28×28×8
+        medium_emb = self.medium_kernel_branch(x)  # 28×28×8
+        large_emb = self.large_kernel_branch(x)    # 28×28×8
 
-        # 直接返回三路独立的embedding，不进行压缩，保留小目标特征
+        # 统一尺寸到28×28（确保所有分支输出尺寸一致）
+        small_emb = F.interpolate(small_emb, size=(28, 28), mode='bilinear', align_corners=False)
+        medium_emb = F.interpolate(medium_emb, size=(28, 28), mode='bilinear', align_corners=False)
+        large_emb = F.interpolate(large_emb, size=(28, 28), mode='bilinear', align_corners=False)
+
+        # 通道拼接 (28×28×24)
+        combined = torch.cat([small_emb, medium_emb, large_emb], dim=1)
+
+          # 特征融合和压缩
+        fused_features = self.feature_fusion(combined)  # 22×22×6
+
         return {
+            'fused': fused_features,
             'small': small_emb,
             'medium': medium_emb,
             'large': large_emb
@@ -331,101 +340,128 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     """
-    三路独立输入解码器
+    特征融合解码器
 
-    该解码器直接接受编码器的三路输出重建原始图像：
-    - 移除MLP扩展层，直接处理三路embedding
-    - 三个并行解码分支：对应编码器的三个分支
-    - 特征融合：将多尺度重建结果融合为最终图像
+    该解码器接受编码器的融合特征输出重建原始图像：
+    - 主要处理融合后的特征，而不是三路独立的embedding
+    - 采用渐进式上采样策略，从24×24重建到224×224
+    - 保持对称的解码架构，确保特征信息的最优重建
 
     核心特性：
-    1. 三路独立输入：直接接受编码器的三路embedding
-    2. 对称设计：解码分支与编码器分支结构对称
+    1. 融合特征输入：主要处理编码器的融合特征输出
+    2. 渐进式上采样：通过多层转置卷积逐步恢复图像尺寸
     3. 无填充策略：所有转置卷积不使用padding，保持边缘真实性
     4. 最终sigmoid：只在最终输出层应用sigmoid激活函数
-    5. 尺寸统一：使用双线性插值将不同尺寸的重建图像统一到224×224
+    5. 多尺度重建：也支持从三路独立特征重建的备选路径
 
     重建策略：
-    1. 直接输入：接受编码器的三路独立embedding
-    2. 并行解码：三个分支同时解码各自的embedding
-    3. 尺寸统一：将三个重建图像上采样到224×224
-    4. 特征融合：使用1×1卷积进行特征融合和降维
-    5. 最终激活：应用sigmoid确保输出范围[0,1]
+    1. 融合特征解码：主要路径，处理22×22×6的融合特征
+    2. 渐进式上采样：22×22 → 56×56 → 112×112 → 224×224
+    3. 通道扩展：从6通道逐步扩展到3通道RGB输出
+    4. 最终激活：应用sigmoid确保输出范围[0,1]
     """
 
     def __init__(self):
         super().__init__()
-        
-        # 小卷积分支解码器 (纹理特征)
+
+          # 主要解码路径 - 处理融合特征
+        self.main_decoder = nn.Sequential(
+            # 22×22×6 → 56×56×16
+            nn.ConvTranspose2d(6, 16, 5, stride=2, padding=0),  # 无padding, (22-5)*2+1 = 35×35，调整stride确保输出合适
+            LayerNormalization(),
+            nn.LeakyReLU(),
+
+            # 56×56×16 → 112×112×12
+            nn.ConvTranspose2d(16, 12, 5, stride=2, padding=0),  # 无padding
+            LayerNormalization(),
+            nn.LeakyReLU(),
+
+            # 112×112×12 → 224×224×6
+            nn.ConvTranspose2d(12, 6, 5, stride=2, padding=0),  # 无padding
+            LayerNormalization(),
+            nn.LeakyReLU(),
+
+            # 224×224×6 → 224×224×3
+            nn.Conv2d(6, 3, 3, stride=1, padding=0)  # 无padding，无sigmoid
+        )
+
+        # 备选的三路解码分支（用于对比和特征分析）
         self.small_decoder = nn.Sequential(
-            # 13×13×3 → 53×53×12
-            nn.ConvTranspose2d(3, 12, 5, stride=4, padding=0),  # 无padding
+            # 28×28×8 → 56×56×12
+            nn.ConvTranspose2d(8, 12, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
-            
-            # 53×53×12 → 110×110×16
-            nn.ConvTranspose2d(12, 16, 5, stride=2, padding=0),  # 无padding
+
+            # 56×56×12 → 112×112×8
+            nn.ConvTranspose2d(12, 8, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
-            
-            # 110×110×16 → 220×220×3
-            nn.ConvTranspose2d(16, 3, 5, stride=2, padding=0)  # 无padding，无sigmoid
-        )  # 输出: 220×220×3
-        
-        # 中卷积分支解码器 (平衡特征)
+
+            # 112×112×8 → 224×224×3
+            nn.ConvTranspose2d(8, 3, 5, stride=2, padding=0)  # 无padding，无sigmoid
+        )
+
         self.medium_decoder = nn.Sequential(
-            # 18×18×4 → 47×47×12
-            nn.ConvTranspose2d(4, 12, 13, stride=2, padding=0),  # 无padding
+            # 28×28×8 → 56×56×12
+            nn.ConvTranspose2d(8, 12, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
-            
-            # 47×47×12 → 106×106×16
-            nn.ConvTranspose2d(12, 16, 13, stride=2, padding=0),  # 无padding
+
+            # 56×56×12 → 112×112×8
+            nn.ConvTranspose2d(12, 8, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
-            
-            # 106×106×16 → 212×212×3
-            nn.ConvTranspose2d(16, 3, 13, stride=2, padding=0)  # 无padding，无sigmoid
-        )  # 输出: 212×212×3
-        
-        # 大卷积分支解码器 (结构特征)
+
+            # 112×112×8 → 224×224×3
+            nn.ConvTranspose2d(8, 3, 5, stride=2, padding=0)  # 无padding，无sigmoid
+        )
+
         self.large_decoder = nn.Sequential(
-            # 11×11×6 → 41×41×12
-            nn.ConvTranspose2d(6, 12, 21, stride=2, padding=0),  # 无padding
+            # 28×28×8 → 56×56×12
+            nn.ConvTranspose2d(8, 12, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
-            
-            # 41×41×12 → 102×102×16
-            nn.ConvTranspose2d(12, 16, 21, stride=2, padding=0),  # 无padding
+
+            # 56×56×12 → 112×112×8
+            nn.ConvTranspose2d(12, 8, 5, stride=2, padding=0),  # 无padding
             LayerNormalization(),
             nn.LeakyReLU(),
-            
-            # 102×102×16 → 204×204×3
-            nn.ConvTranspose2d(16, 3, 21, stride=2, padding=0)  # 无padding，无sigmoid
-        )  # 输出: 204×204×3
-        
-        # 自适应尺寸融合模块 - 直接合并特征，最后应用sigmoid
-        self.adaptive_fusion = nn.Sequential(
-            nn.Conv2d(9, 6, 1),  # 融合三个重建结果
+
+            # 112×112×8 → 224×224×3
+            nn.ConvTranspose2d(8, 3, 5, stride=2, padding=0)  # 无padding，无sigmoid
+        )
+
+          # 最终融合模块
+        self.final_fusion = nn.Sequential(
+            nn.Conv2d(12, 6, 1),  # 融合主路径和三路重建结果 (4个重建结果 x 3通道 = 12通道)
             LayerNormalization(),
             nn.LeakyReLU(),
             nn.Conv2d(6, 3, 1),  # 最终输出，无sigmoid
         )
-    
+
     def forward(self, embeddings):
         """
         Args:
-            embeddings: 编码器的三路输出字典，包含:
-                       - 'small': 13×13×3
-                       - 'medium': 18×18×4
-                       - 'large': 11×11×6
+            embeddings: 编码器的输出字典，包含:
+                       - 'fused': 22×22×6 (主要融合特征)
+                       - 'small': 28×28×8
+                       - 'medium': 28×28×8
+                       - 'large': 28×28×8
         """
-        # 直接获取三路embedding
-        small_emb = embeddings['small']    # B x 3 x 13 x 13
-        medium_emb = embeddings['medium']  # B x 4 x 18 x 18
-        large_emb = embeddings['large']    # B x 6 x 11 x 11
+        # 主要解码路径 - 处理融合特征
+        fused_emb = embeddings['fused']  # B x 6 x 22 x 22
 
-        # 并行解码
+        # 首先将融合特征上采样到28×28以便与其他分支对齐
+        fused_emb_up = F.interpolate(fused_emb, size=(28, 28), mode='bilinear', align_corners=False)
+
+        # 主路径解码
+        main_recon = self.main_decoder(fused_emb_up)  # 224×224×3
+
+        # 备选的三路解码（用于对比和特征分析）
+        small_emb = embeddings['small']    # B x 8 x 28 x 28
+        medium_emb = embeddings['medium']  # B x 8 x 28 x 28
+        large_emb = embeddings['large']    # B x 8 x 28 x 28
+
         small_recon = self.small_decoder(small_emb)
         medium_recon = self.medium_decoder(medium_emb)
         large_recon = self.large_decoder(large_emb)
@@ -434,10 +470,11 @@ class Decoder(nn.Module):
         small_recon_up = F.interpolate(small_recon, size=(224, 224), mode='bilinear', align_corners=False)
         medium_recon_up = F.interpolate(medium_recon, size=(224, 224), mode='bilinear', align_corners=False)
         large_recon_up = F.interpolate(large_recon, size=(224, 224), mode='bilinear', align_corners=False)
+        main_recon_up = F.interpolate(main_recon, size=(224, 224), mode='bilinear', align_corners=False)
 
-        # 通道拼接 (224×224×9)
-        combined = torch.cat([small_recon_up, medium_recon_up, large_recon_up], dim=1)
-        final_output = self.adaptive_fusion(combined)
+        # 通道拼接 (224×224×12)
+        combined = torch.cat([main_recon_up, small_recon_up, medium_recon_up, large_recon_up], dim=1)
+        final_output = self.final_fusion(combined)
 
         # 只在最终输出应用sigmoid
         final_output = torch.sigmoid(final_output)
