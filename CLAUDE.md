@@ -55,21 +55,24 @@ gym.register_envs(ale_py)
    - Parallel multi-scale architecture with three convolutional branches
    - Integrated monitoring and visualization system
    - No-padding design preserving edge information
-   - Compression ratios: 395:1, 233:1, 278:1, 294:1 (final embedding)
+   - Feature fusion architecture with unified output dimensions
 
 2. **Encoder** (`model.py:228`):
-   - Three parallel branches with different kernel sizes
-   - Small (5×5): 224×224×3 → 13×13×3, texture features
-   - Medium (13×13): 224×224×3 → 18×18×4, balanced features
-   - Large (21×21): 224×224×3 → 11×11×6, structural features
+   - Three parallel branches with different kernel sizes for multi-scale feature extraction
+   - Small (5×5): 224×224×3 → 28×28×8, texture features
+   - Medium (13×13): 224×224×3 → 28×28×8, balanced features
+   - Large (21×21): 224×224×3 → 28×28×8, structural features
+   - Feature fusion: 28×28×24 → 24×24×8 using 3×3 convolutions
    - No-padding design preserving edge information
-   - Default latent_channels=3 (updated from 4)
+   - Compression ratio: 224×224×3 → 24×24×8 (504:1)
 
-3. **Decoder** (`model.py:314`):
-   - Symmetric three-branch decoder architecture
-   - Adaptive fusion module for size unification
+3. **Decoder** (`model.py:336`):
+   - Primary path for fused feature reconstruction
+   - Progressive upsampling: 24×24×8 → 56×56×16 → 112×112×12 → 224×224×3
+   - Alternative three-branch decoding for feature analysis
+   - Final fusion combining main path and auxiliary branches
+   - Bilinear interpolation for size unification
    - Final sigmoid activation for output normalization
-   - Bilinear interpolation for size alignment
 
 4. **ObGD Optimizer** (`optim.py:13`):
    - Online Gradient Descent optimizer for streaming learning

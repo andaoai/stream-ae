@@ -16,7 +16,7 @@ print(f"Using device: {DEVICE}")
 MODEL_CONFIG = {
     'input_channels': 3,
     'latent_channels': 3,
-    'lr': 1.0,
+    'lr': 0.005,
     'gamma': 0.99,
     'lamda': 0.8,
     'kappa': 2.0,
