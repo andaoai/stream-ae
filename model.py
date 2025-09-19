@@ -327,154 +327,180 @@ class Encoder(nn.Module):
         # 通道拼接 (28×28×24)
         combined = torch.cat([small_emb, medium_emb, large_emb], dim=1)
 
-          # 特征融合和压缩
+        # 特征融合和压缩
         fused_features = self.feature_fusion(combined)  # 22×22×6
 
-        return {
-            'fused': fused_features,
-            'small': small_emb,
-            'medium': medium_emb,
-            'large': large_emb
-        }
+        return fused_features
 
 
 class Decoder(nn.Module):
     """
-    特征融合解码器
+    对称特征分解解码器
 
-    该解码器接受编码器的融合特征输出重建原始图像：
-    - 主要处理融合后的特征，而不是三路独立的embedding
-    - 采用渐进式上采样策略，从24×24重建到224×224
-    - 保持对称的解码架构，确保特征信息的最优重建
+    该解码器与编码器完全对称，反向实现编码器的每一个步骤：
+    - 特征分解：22×22×6 → 28×28×24 (反向融合过程)
+    - 三路并行解码：28×28×8 (三路) → 224×224×3 (反向编码过程)
+
+    对称架构：
+    编码器: 224×224×3 → [三路分支] → 28×28×24 → 22×22×6
+    解码器: 22×22×6 → 28×28×24 → [三路分支] → 224×224×3
 
     核心特性：
-    1. 融合特征输入：主要处理编码器的融合特征输出
-    2. 渐进式上采样：通过多层转置卷积逐步恢复图像尺寸
-    3. 无填充策略：所有转置卷积不使用padding，保持边缘真实性
-    4. 最终sigmoid：只在最终输出层应用sigmoid激活函数
-    5. 多尺度重建：也支持从三路独立特征重建的备选路径
+    1. 完全对称：与编码器结构镜像对称
+    2. 特征分解：反向融合过程，恢复三路特征
+    3. 并行解码：三路独立解码分支
+    4. 无填充设计：保持边缘真实性
+    5. 真正压缩：只使用22×22×6融合特征
 
-    重建策略：
-    1. 融合特征解码：主要路径，处理22×22×6的融合特征
-    2. 渐进式上采样：22×22 → 56×56 → 112×112 → 224×224
-    3. 通道扩展：从6通道逐步扩展到3通道RGB输出
-    4. 最终激活：应用sigmoid确保输出范围[0,1]
+    解码策略：
+    1. 特征分解: 22×22×6 → 24×24×8 → 26×26×16 → 28×28×24
+    2. 通道分离: 28×28×24 → 28×28×8 (三路)
+    3. 并行上采样: 三路分别从28×28×8 → 224×224×3
+    4. 结果融合: 融合三路重建结果
     """
 
     def __init__(self):
         super().__init__()
 
-          # 主要解码路径 - 处理融合特征
-        self.main_decoder = nn.Sequential(
-            # 22×22×6 → 56×56×16
-            nn.ConvTranspose2d(6, 16, 5, stride=2, padding=0),  # 无padding, (22-5)*2+1 = 35×35，调整stride确保输出合适
+        # 特征分解模块 - 反向融合过程
+        self.feature_decomposition = nn.Sequential(
+            # 22×22×6 → 24×24×8 (反向编码器的最后一步)
+            nn.ConvTranspose2d(6, 8, 3, stride=1, padding=0),  # (22-3)+1 = 20×20, 需要调整
             LayerNormalization(),
             nn.LeakyReLU(),
 
-            # 56×56×16 → 112×112×12
-            nn.ConvTranspose2d(16, 12, 5, stride=2, padding=0),  # 无padding
+            # 使用插值确保精确尺寸
+            nn.Upsample(size=(24, 24), mode='bilinear', align_corners=False),
+            nn.Conv2d(8, 8, 3, stride=1, padding=0),
             LayerNormalization(),
             nn.LeakyReLU(),
 
-            # 112×112×12 → 224×224×6
-            nn.ConvTranspose2d(12, 6, 5, stride=2, padding=0),  # 无padding
+            # 24×24×8 → 26×26×16 (反向编码器的中间步骤)
+            nn.ConvTranspose2d(8, 16, 3, stride=1, padding=0),  # (24-3)+1 = 22×22
             LayerNormalization(),
             nn.LeakyReLU(),
 
-            # 224×224×6 → 224×224×3
-            nn.Conv2d(6, 3, 3, stride=1, padding=0)  # 无padding，无sigmoid
-        )
+            nn.Upsample(size=(26, 26), mode='bilinear', align_corners=False),
+            nn.Conv2d(16, 16, 3, stride=1, padding=0),
+            LayerNormalization(),
+            nn.LeakyReLU(),
 
-        # 备选的三路解码分支（用于对比和特征分析）
+            # 26×26×16 → 28×28×24 (反向编码器的第一步)
+            nn.ConvTranspose2d(16, 24, 3, stride=1, padding=0),  # (26-3)+1 = 24×24
+            LayerNormalization(),
+            nn.LeakyReLU(),
+
+            nn.Upsample(size=(28, 28), mode='bilinear', align_corners=False),
+            nn.Conv2d(24, 24, 3, stride=1, padding=0),
+            LayerNormalization(),
+            nn.LeakyReLU()
+        )  # 输出: 28×28×24
+
+        # 通道分离 - 将24通道分离为三路8通道
+        self.channel_split = nn.Conv2d(24, 24, 1)  # 1×1卷积用于通道重排
+
+        # 三路并行解码分支 (与编码器镜像对称)
+
+        # 小卷积分支解码 - 反向编码器的small_kernel_branch
         self.small_decoder = nn.Sequential(
-            # 28×28×8 → 56×56×12
-            nn.ConvTranspose2d(8, 12, 5, stride=2, padding=0),  # 无padding
+            # 28×28×8 → 106×106×16 (反向编码器的第二步)
+            nn.ConvTranspose2d(8, 16, 7, stride=4, padding=0, output_padding=1),  # (28-7)*4+1+1 = 89×89, 需要调整
             LayerNormalization(),
             nn.LeakyReLU(),
 
-            # 56×56×12 → 112×112×8
-            nn.ConvTranspose2d(12, 8, 5, stride=2, padding=0),  # 无padding
+            nn.Upsample(size=(106, 106), mode='bilinear', align_corners=False),
+            nn.Conv2d(16, 16, 3, stride=1, padding=0),
             LayerNormalization(),
             nn.LeakyReLU(),
 
-            # 112×112×8 → 224×224×3
-            nn.ConvTranspose2d(8, 3, 5, stride=2, padding=0)  # 无padding，无sigmoid
+            # 106×106×16 → 224×224×3 (反向编码器的第一步)
+            nn.ConvTranspose2d(16, 3, 5, stride=2, padding=0, output_padding=1),  # (106-5)*2+1+1 = 205×205
+            LayerNormalization(),
+            nn.LeakyReLU(),
+
+            nn.Upsample(size=(224, 224), mode='bilinear', align_corners=False),
+            nn.Conv2d(3, 3, 3, stride=1, padding=0),
         )
 
+        # 中卷积分支解码 - 反向编码器的medium_kernel_branch
         self.medium_decoder = nn.Sequential(
-            # 28×28×8 → 56×56×12
-            nn.ConvTranspose2d(8, 12, 5, stride=2, padding=0),  # 无padding
+            # 28×28×8 → 102×102×16 (反向编码器的第二步)
+            nn.ConvTranspose2d(8, 16, 7, stride=4, padding=0, output_padding=1),  # (28-7)*4+1+1 = 89×89
             LayerNormalization(),
             nn.LeakyReLU(),
 
-            # 56×56×12 → 112×112×8
-            nn.ConvTranspose2d(12, 8, 5, stride=2, padding=0),  # 无padding
+            nn.Upsample(size=(102, 102), mode='bilinear', align_corners=False),
+            nn.Conv2d(16, 16, 3, stride=1, padding=0),
             LayerNormalization(),
             nn.LeakyReLU(),
 
-            # 112×112×8 → 224×224×3
-            nn.ConvTranspose2d(8, 3, 5, stride=2, padding=0)  # 无padding，无sigmoid
+            # 102×102×16 → 224×224×3 (反向编码器的第一步)
+            nn.ConvTranspose2d(16, 3, 13, stride=2, padding=0, output_padding=1),  # (102-13)*2+1+1 = 181×181
+            LayerNormalization(),
+            nn.LeakyReLU(),
+
+            nn.Upsample(size=(224, 224), mode='bilinear', align_corners=False),
+            nn.Conv2d(3, 3, 3, stride=1, padding=0),
         )
 
+        # 大卷积分支解码 - 反向编码器的large_kernel_branch
         self.large_decoder = nn.Sequential(
-            # 28×28×8 → 56×56×12
-            nn.ConvTranspose2d(8, 12, 5, stride=2, padding=0),  # 无padding
+            # 28×28×8 → 98×98×16 (反向编码器的第二步)
+            nn.ConvTranspose2d(8, 16, 7, stride=4, padding=0, output_padding=1),  # (28-7)*4+1+1 = 89×89
             LayerNormalization(),
             nn.LeakyReLU(),
 
-            # 56×56×12 → 112×112×8
-            nn.ConvTranspose2d(12, 8, 5, stride=2, padding=0),  # 无padding
+            nn.Upsample(size=(98, 98), mode='bilinear', align_corners=False),
+            nn.Conv2d(16, 16, 3, stride=1, padding=0),
             LayerNormalization(),
             nn.LeakyReLU(),
 
-            # 112×112×8 → 224×224×3
-            nn.ConvTranspose2d(8, 3, 5, stride=2, padding=0)  # 无padding，无sigmoid
+            # 98×98×16 → 224×224×3 (反向编码器的第一步)
+            nn.ConvTranspose2d(16, 3, 21, stride=2, padding=0, output_padding=1),  # (98-21)*2+1+1 = 157×157
+            LayerNormalization(),
+            nn.LeakyReLU(),
+
+            nn.Upsample(size=(224, 224), mode='bilinear', align_corners=False),
+            nn.Conv2d(3, 3, 3, stride=1, padding=0),
         )
 
-          # 最终融合模块
+        # 最终融合模块 - 融合三路重建结果并修正尺寸
         self.final_fusion = nn.Sequential(
-            nn.Conv2d(12, 6, 1),  # 融合主路径和三路重建结果 (4个重建结果 x 3通道 = 12通道)
+            nn.Conv2d(9, 6, 1),  # 融合三路结果 (3×3=9通道)
             LayerNormalization(),
             nn.LeakyReLU(),
-            nn.Conv2d(6, 3, 1),  # 最终输出，无sigmoid
+            nn.Conv2d(6, 6, 1),  # 中间层
+            LayerNormalization(),
+            nn.LeakyReLU(),
+            nn.Upsample(size=(224, 224), mode='bilinear', align_corners=False),  # 确保精确尺寸
+            nn.Conv2d(6, 3, 3, stride=1, padding=1),  # 最终输出，保持224×224
         )
 
-    def forward(self, embeddings):
+    def forward(self, fused_features):
         """
         Args:
-            embeddings: 编码器的输出字典，包含:
-                       - 'fused': 22×22×6 (主要融合特征)
-                       - 'small': 28×28×8
-                       - 'medium': 28×28×8
-                       - 'large': 28×28×8
+            fused_features: 编码器的输出张量，形状为 B x 6 x 22 x 22
+                           这是压缩的融合特征
         """
-        # 主要解码路径 - 处理融合特征
-        fused_emb = embeddings['fused']  # B x 6 x 22 x 22
+        # 特征分解：反向融合过程
+        decomposed_features = self.feature_decomposition(fused_features)  # 28×28×24
 
-        # 首先将融合特征上采样到28×28以便与其他分支对齐
-        fused_emb_up = F.interpolate(fused_emb, size=(28, 28), mode='bilinear', align_corners=False)
+        # 通道重排以便分离
+        rearranged_features = self.channel_split(decomposed_features)  # 28×28×24
 
-        # 主路径解码
-        main_recon = self.main_decoder(fused_emb_up)  # 224×224×3
+        # 将24通道分离为三路8通道
+        small_features = rearranged_features[:, 0:8, :, :]    # 28×28×8
+        medium_features = rearranged_features[:, 8:16, :, :]  # 28×28×8
+        large_features = rearranged_features[:, 16:24, :, :]  # 28×28×8
 
-        # 备选的三路解码（用于对比和特征分析）
-        small_emb = embeddings['small']    # B x 8 x 28 x 28
-        medium_emb = embeddings['medium']  # B x 8 x 28 x 28
-        large_emb = embeddings['large']    # B x 8 x 28 x 28
+        # 三路并行解码
+        small_recon = self.small_decoder(small_features)    # 224×224×3
+        medium_recon = self.medium_decoder(medium_features)  # 224×224×3
+        large_recon = self.large_decoder(large_features)    # 224×224×3
 
-        small_recon = self.small_decoder(small_emb)
-        medium_recon = self.medium_decoder(medium_emb)
-        large_recon = self.large_decoder(large_emb)
-
-        # 统一尺寸到224×224
-        small_recon_up = F.interpolate(small_recon, size=(224, 224), mode='bilinear', align_corners=False)
-        medium_recon_up = F.interpolate(medium_recon, size=(224, 224), mode='bilinear', align_corners=False)
-        large_recon_up = F.interpolate(large_recon, size=(224, 224), mode='bilinear', align_corners=False)
-        main_recon_up = F.interpolate(main_recon, size=(224, 224), mode='bilinear', align_corners=False)
-
-        # 通道拼接 (224×224×12)
-        combined = torch.cat([main_recon_up, small_recon_up, medium_recon_up, large_recon_up], dim=1)
-        final_output = self.final_fusion(combined)
+        # 融合三路重建结果
+        combined = torch.cat([small_recon, medium_recon, large_recon], dim=1)  # 224×224×9
+        final_output = self.final_fusion(combined)  # 224×224×3
 
         # 只在最终输出应用sigmoid
         final_output = torch.sigmoid(final_output)

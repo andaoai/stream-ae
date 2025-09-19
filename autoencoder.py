@@ -81,29 +81,22 @@ class StreamingAutoEncoder(nn.Module):
     
     def encode(self, x):
         """编码"""
-        embeddings = self.encoder(x)
+        fused_features = self.encoder(x)
 
         # 存储特征图用于可视化
         self.feature_visualizer.store_feature_map('input', x)
 
-        # 分别存储三路embedding用于可视化
-        small_emb = embeddings['small']  # B x 3 x 13 x 13
-        medium_emb = embeddings['medium']  # B x 4 x 18 x 18
-        large_emb = embeddings['large']  # B x 6 x 11 x 11
-
-        # 存储各分支特征图（取第一个batch）
-        self.feature_visualizer.store_feature_map('embedding_small', small_emb[:1])
-        self.feature_visualizer.store_feature_map('embedding_medium', medium_emb[:1])
-        self.feature_visualizer.store_feature_map('embedding_large', large_emb[:1])
+        # 存储融合特征图（取第一个batch）
+        self.feature_visualizer.store_feature_map('fused_embedding', fused_features[:1])
 
         # 保存当前embedding用于统计
-        self._current_embeddings = {k: v.detach() for k, v in embeddings.items()}
+        self._current_embeddings = fused_features.detach()
 
-        return embeddings
+        return fused_features
     
-    def decode(self, embeddings):
+    def decode(self, fused_features):
         """解码"""
-        reconstruction = self.decoder(embeddings)
+        reconstruction = self.decoder(fused_features)
 
         # 存储输出特征图
         self.feature_visualizer.store_feature_map('output', reconstruction)
@@ -112,9 +105,9 @@ class StreamingAutoEncoder(nn.Module):
     
     def forward(self, x):
         """前向传播"""
-        embeddings = self.encode(x)
-        reconstruction = self.decode(embeddings)
-        return reconstruction, embeddings
+        fused_features = self.encode(x)
+        reconstruction = self.decode(fused_features)
+        return reconstruction, fused_features
     
     def update_params(self, curr_frame, debug=False):
         """
@@ -152,7 +145,7 @@ class StreamingAutoEncoder(nn.Module):
             self.prev_frame = self.prev_frame.to(DEVICE)
 
         # 前向传播
-        reconstruction, embeddings = self(curr_frame)
+        reconstruction, fused_features = self(curr_frame)
 
         # 检测像素变化
         change_mask, change_intensity = None, None
@@ -174,7 +167,7 @@ class StreamingAutoEncoder(nn.Module):
 
         # 更新历史信息（保持在GPU上）
         self.prev_frame = curr_frame.detach().clone()
-        self.prev_embeddings = {k: v.detach().clone() for k, v in embeddings.items()}
+        self.prev_embeddings = fused_features.detach().clone()
 
         # 记录日志
         if self.tensorboard_logger:
@@ -192,7 +185,7 @@ class StreamingAutoEncoder(nn.Module):
             'l1_loss': l1_loss.item(),
             'ssim_loss': ssim_loss.item(),
             'reconstruction': reconstruction,
-            'embeddings': embeddings,
+            'embeddings': fused_features,
             'change_mask': change_mask,
             'change_intensity': change_intensity,
             'fps': self.perf_monitor.get_avg_fps(),
@@ -224,7 +217,7 @@ class StreamingAutoEncoder(nn.Module):
 
         # 首先计算当前帧的损失
         with torch.no_grad():
-            curr_reconstruction, curr_embeddings = self(curr_frame)
+            curr_reconstruction, curr_fused_features = self(curr_frame)
             curr_global_loss, curr_mse_loss, curr_l1_loss, curr_ssim_loss = compute_global_loss(curr_frame, curr_reconstruction)
             self.current_frame_loss = curr_global_loss.item()
 
@@ -258,7 +251,7 @@ class StreamingAutoEncoder(nn.Module):
             'l1_loss': batch_results['total_l1_loss'],
             'ssim_loss': batch_results['total_ssim_loss'],
             'reconstruction': batch_results['reconstructions'][0],  # 返回当前帧的重建结果
-            'embeddings': {k: v[0:1] for k, v in batch_results['embeddings'].items()},  # 返回当前帧的embedding
+            'embeddings': batch_results['embeddings'][0:1],  # 返回当前帧的embedding
             'change_mask': batch_results.get('change_mask'),
             'change_intensity': batch_results.get('change_intensity'),
             'fps': self.perf_monitor.get_avg_fps(),
@@ -283,7 +276,7 @@ class StreamingAutoEncoder(nn.Module):
         batch_size = batch_tensor.shape[0]
 
         # 前向传播
-        reconstructions, embeddings = self(batch_tensor)
+        reconstructions, fused_features = self(batch_tensor)
 
         # 计算每帧的损失
         batch_losses = []
@@ -335,7 +328,7 @@ class StreamingAutoEncoder(nn.Module):
 
         # 更新历史信息
         self.prev_frame = batch_tensor[0:1].detach().clone()
-        self.prev_embeddings = {k: v[0:1].detach().clone() for k, v in embeddings.items()}
+        self.prev_embeddings = fused_features[0:1].detach().clone()
 
         return {
             'total_loss': total_loss.item(),
@@ -347,7 +340,7 @@ class StreamingAutoEncoder(nn.Module):
             'l1_losses': batch_l1_losses,
             'ssim_losses': batch_ssim_losses,
             'reconstructions': reconstructions,
-            'embeddings': embeddings,
+            'embeddings': fused_features,
             'frame_ids': frame_ids,
             'change_mask': change_mask,
             'change_intensity': change_intensity
@@ -430,11 +423,10 @@ class StreamingAutoEncoder(nn.Module):
         
         # 记录embedding统计信息
         if hasattr(self, '_current_embeddings'):
-            # 记录三路embedding的统计信息
-            for name, emb in self._current_embeddings.items():
-                logger.log_scalar(f'Embedding/{name}_Mean', emb.mean().item())
-                logger.log_scalar(f'Embedding/{name}_Std', emb.std().item())
-                logger.log_scalar(f'Embedding/{name}_Norm', torch.norm(emb).item())
+            # 记录融合embedding的统计信息
+            logger.log_scalar('Embedding/Fused_Mean', self._current_embeddings.mean().item())
+            logger.log_scalar('Embedding/Fused_Std', self._current_embeddings.std().item())
+            logger.log_scalar('Embedding/Fused_Norm', torch.norm(self._current_embeddings).item())
         
         # 每步都记录图像，实现真正的实时更新
         self._log_images(reconstruction, curr_frame)
@@ -467,13 +459,12 @@ class StreamingAutoEncoder(nn.Module):
         """记录特征图到TensorBoard"""
         logger = self.tensorboard_logger
 
-        # 记录三路embedding的可视化
-        for name in ['small', 'medium', 'large']:
-            embedding_map = self.feature_visualizer.get_feature_visualization(f'embedding_{name}')
-            if embedding_map is not None:
-                # 将numpy数组转换为torch张量并添加批次维度
-                feature_tensor = torch.from_numpy(embedding_map).unsqueeze(0).unsqueeze(0)
-                logger.log_images(f'03_Features/embedding_{name}', feature_tensor)
+        # 记录融合embedding的可视化
+        embedding_map = self.feature_visualizer.get_feature_visualization('fused_embedding')
+        if embedding_map is not None:
+            # 将numpy数组转换为torch张量并添加批次维度
+            feature_tensor = torch.from_numpy(embedding_map).unsqueeze(0).unsqueeze(0)
+            logger.log_images('03_Features/fused_embedding', feature_tensor)
     
     def get_performance_summary(self):
         """获取性能摘要"""

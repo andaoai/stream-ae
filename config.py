@@ -16,7 +16,7 @@ print(f"Using device: {DEVICE}")
 MODEL_CONFIG = {
     'input_channels': 3,
     'latent_channels': 3,
-    'lr': 0.005,
+    'lr': 0.0001,
     'gamma': 0.99,
     'lamda': 0.8,
     'kappa': 2.0,
@@ -34,7 +34,7 @@ TRAINING_CONFIG = {
 BATCH_CONFIG = {
     'batch_size': 4,  # 批量大小
     'queue_size': 24,  # 损失优先级队列大小
-    'min_loss_threshold': 0.001,  # 最低损失阈值
+    'min_loss_threshold': 0.0001,  # 最低损失阈值
     'enable_batch_training': True,  # 启用批量训练
 }
 
